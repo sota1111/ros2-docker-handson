@@ -1,0 +1,39 @@
+services:
+  ros2-jazzy:
+    # 使用するイメージ名（docker run で指定したものに合わせました）
+    image: ros_jazzy_tb3:phase1    
+    container_name: ros_gui_phase1
+
+    # ネットワーク設定
+    network_mode: host
+    ipc: host
+    
+    # GUIおよびGPUの設定
+    tty: true
+    stdin_open: true
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      # Phase 1に必要な変数を明示（Dockerfileにある場合も、ここにあると上書き）
+      - TURTLEBOT3_MODEL=burger
+
+    volumes:
+      # X11（GUI）転送用
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # 【追加推奨】認証ファイルの共有（これがあるとGUIの起動がより安定します）
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw
+      # 【追加推奨】ソースコードの同期（ホストの ./ws とコンテナ内を繋ぐ）
+      - ./ws:/ws:rw
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # docker run 時の最後の "bash" に相当
+    command: bash
