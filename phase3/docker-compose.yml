@@ -1,0 +1,41 @@
+x-common-config: &common
+  build: .
+  network_mode: host
+  ipc: host
+  environment:
+    - DISPLAY=${DISPLAY}
+    - QT_X11_NO_MITSHM=1
+    - NVIDIA_VISIBLE_DEVICES=all
+    - NVIDIA_DRIVER_CAPABILITIES=all
+    - TURTLEBOT3_MODEL=burger
+  volumes:
+    - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw
+    - ./ws:/ws:rw
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+services:
+  # Gazebo シミュレータ
+  gazebo:
+    <<: *common
+    container_name: gazebo
+    command: ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
+
+  # EKF 自己位置推定
+  localization:
+    <<: *common
+    container_name: ekf
+    # 指定されたファイル名に変更
+    command: ros2 launch /ws/launch/ekf.launch.py
+
+  # RViz2 可視化
+  rviz:
+    <<: *common
+    container_name: rviz
+    command: rviz2
