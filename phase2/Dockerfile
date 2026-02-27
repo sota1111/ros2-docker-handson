@@ -15,6 +15,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-turtlebot3-gazebo \
     ros-jazzy-teleop-twist-keyboard \
+    ros-jazzy-robot-localization \
  && rm -rf /var/lib/apt/lists/*
 
 # TurtleBot3 設定（Dockerfileでは固定値のみ）
