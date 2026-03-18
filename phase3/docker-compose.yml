@@ -37,8 +37,7 @@ services:
     command:
       - bash
       - -lc
-      - source /opt/ros/jazzy/setup.bash && ros2 launch /ws/launch/ekf.launch.py & sleep 2; ros2 launch /ws/launch/amcl.launch.py map:=/ws/maps/map.yaml; wait
-
+      - source /opt/ros/jazzy/setup.bash && ros2 launch /ws/launch/ekf.launch.py & sleep 2; ros2 launch /ws/launch/amcl.launch.py map:=/ws/maps/map.yaml init_x:=0.0 init_y:=0.0 init_yaw:=0.0; wait
   rviz:
     build: .
     container_name: rviz

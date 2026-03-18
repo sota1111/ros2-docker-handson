@@ -10,6 +10,7 @@ amcl:
 
     # LaserScan の topic
     scan_topic: scan
+    map_topic: map
 
     # AMCL が map -> odom の TF を publish する
     tf_broadcast: true
@@ -39,9 +40,25 @@ amcl:
     alpha4: 0.2
     alpha5: 0.2
 
-    # 初期位置は RViz の 2D Pose Estimate から与える
-    set_initial_pose: false
-    always_reset_initial_pose: false
+    # 起動時に初期姿勢をパラメータから与える
+    set_initial_pose: true
+
+    # 再起動時も必ず初期姿勢を要求する
+    always_reset_initial_pose: true
+
+    # 初期姿勢
+    # map 座標系での初期位置
+    # まずは Gazebo 初期位置に合わせて 0,0,0 で試す
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      yaw: 0.0
+
+    # 最後の姿勢を保存
+    save_pose_rate: 0.5
+
+    # 地図再読込を許可
     first_map_only: false
 
 map_server:
