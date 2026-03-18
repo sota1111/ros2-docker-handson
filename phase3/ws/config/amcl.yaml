@@ -1,0 +1,66 @@
+amcl:
+  ros__parameters:
+    # Gazebo の /clock を使う
+    use_sim_time: true
+
+    # 公式ドキュメント記載の基本フレーム設定
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+
+    # LaserScan の topic
+    scan_topic: scan
+
+    # AMCL が map -> odom の TF を publish する
+    tf_broadcast: true
+
+    # TF 許容時間
+    transform_tolerance: 1.0
+
+    # 差動二輪向け運動モデル
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+
+    # レーザモデル
+    laser_model_type: "likelihood_field"
+
+    # 最小限の粒子設定
+    min_particles: 500
+    max_particles: 2000
+    max_beams: 60
+
+    # 少し動いたら更新
+    update_min_d: 0.10
+    update_min_a: 0.10
+
+    # 公式の代表的な既定値に寄せたノイズ設定
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+
+    # 初期位置は RViz の 2D Pose Estimate から与える
+    set_initial_pose: false
+    always_reset_initial_pose: false
+    first_map_only: false
+
+map_server:
+  ros__parameters:
+    # Gazebo の /clock を使う
+    use_sim_time: true
+
+    # launch 側から上書きするため空文字にしておく
+    yaml_filename: ""
+
+lifecycle_manager_localization:
+  ros__parameters:
+    # Gazebo の /clock を使う
+    use_sim_time: true
+
+    # 起動時に自動で active まで持っていく
+    autostart: true
+
+    # 公式ドキュメント通り、起動順を配列で与える
+    node_names:
+      - map_server
+      - amcl

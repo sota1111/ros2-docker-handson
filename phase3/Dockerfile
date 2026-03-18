@@ -1,31 +1,49 @@
+# ROS公式Dockerイメージ
+# jazzy-desktop-full は以下を含む：
+# ・ROS2 Jazzy core
+# ・RViz
+# ・Gazebo (gz-sim)
+# ・デバッグツール
+# ・GUI系依存
+# 学習用途では最もトラブルが少ないベース
 FROM osrf/ros:jazzy-desktop-full
-# jazzy-desktop ＋ 以下が追加される。
 
-# 追加されるもの（重要）
-# ・Gazebo Sim（gz-sim, gz-gui）
-# ・Gazebo classic 互換周辺
-# ・デモ用ワールド・リソース
-# ・シミュレーション系の依存一式
-# ・チュートリアル向けパッケージ
-
+# bashをlogin shell化（ROS環境変数展開用）
 SHELL ["/bin/bash", "-lc"]
+
+# apt対話抑止
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Phase 1: TurtleBot3 + Gazebo + RViz + Teleop（最小）
+# Phase3に必要な最小パッケージのみ導入
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    # TurtleBot3 シミュレーション
+    ros-jazzy-turtlebot3 \
+    ros-jazzy-turtlebot3-msgs \
+    ros-jazzy-turtlebot3-description \
     ros-jazzy-turtlebot3-gazebo \
+    # 手動操作
     ros-jazzy-teleop-twist-keyboard \
+    # EKF
     ros-jazzy-robot-localization \
+    # AMCL関連
+    ros-jazzy-nav2-amcl \
+    ros-jazzy-nav2-map-server \
+    ros-jazzy-nav2-lifecycle-manager \
+    # RVizでparticle表示用
+    ros-jazzy-nav2-rviz-plugins \
  && rm -rf /var/lib/apt/lists/*
 
-# TurtleBot3 設定（Dockerfileでは固定値のみ）
+
+# TurtleBot3モデル指定（必須）
 ENV TURTLEBOT3_MODEL=burger
+
+# Gazeboリソースパス
+# TB3モデルをGazeboが見つけるため必要
 ENV GZ_SIM_RESOURCE_PATH=/opt/ros/jazzy/share/turtlebot3_gazebo/models
 
-# ROS 環境を常時有効化（既存値があれば bash 側でマージ）
-RUN echo "source /opt/ros/jazzy/setup.bash" >> /root/.bashrc \
- && echo "export TURTLEBOT3_MODEL=burger" >> /root/.bashrc \
- && echo 'export GZ_SIM_RESOURCE_PATH=/opt/ros/jazzy/share/turtlebot3_gazebo/models:${GZ_SIM_RESOURCE_PATH}' >> /root/.bashrc
 
+# 作業ディレクトリ
 WORKDIR /ws
+
+# デフォルト起動シェル
 CMD ["bash"]

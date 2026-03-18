@@ -1,41 +1,79 @@
-x-common-config: &common
-  build: .
-  network_mode: host
-  ipc: host
-  environment:
-    - DISPLAY=${DISPLAY}
-    - QT_X11_NO_MITSHM=1
-    - NVIDIA_VISIBLE_DEVICES=all
-    - NVIDIA_DRIVER_CAPABILITIES=all
-    - TURTLEBOT3_MODEL=burger
-  volumes:
-    - /tmp/.X11-unix:/tmp/.X11-unix:rw
-    - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw
-    - ./ws:/ws:rw
-  deploy:
-    resources:
-      reservations:
-        devices:
-          - driver: nvidia
-            count: all
-            capabilities: [gpu]
-
 services:
-  # Gazebo シミュレータ
   gazebo:
-    <<: *common
+    build: .
     container_name: gazebo
-    command: ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
+    network_mode: host
+    ipc: host
+    environment:
+      DISPLAY: ${DISPLAY}
+      XAUTHORITY: ${XAUTHORITY:-$HOME/.Xauthority}
+      TURTLEBOT3_MODEL: burger
+      ROS_DOMAIN_ID: 0
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw
+      - ./ws:/ws:rw
+    command:
+      - bash
+      - -lc
+      - source /opt/ros/jazzy/setup.bash && ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
 
-  # EKF 自己位置推定
   localization:
-    <<: *common
-    container_name: ekf
-    # 指定されたファイル名に変更
-    command: ros2 launch /ws/launch/ekf.launch.py
+    build: .
+    container_name: localization
+    network_mode: host
+    ipc: host
+    depends_on:
+      - gazebo
+    environment:
+      DISPLAY: ${DISPLAY}
+      XAUTHORITY: ${XAUTHORITY:-$HOME/.Xauthority}
+      TURTLEBOT3_MODEL: burger
+      ROS_DOMAIN_ID: 0
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw
+      - ./ws:/ws:rw
+    command:
+      - bash
+      - -lc
+      - source /opt/ros/jazzy/setup.bash && ros2 launch /ws/launch/ekf.launch.py & sleep 2; ros2 launch /ws/launch/amcl.launch.py map:=/ws/maps/map.yaml; wait
 
-  # RViz2 可視化
   rviz:
-    <<: *common
+    build: .
     container_name: rviz
-    command: rviz2
+    network_mode: host
+    ipc: host
+    depends_on:
+      - localization
+    environment:
+      DISPLAY: ${DISPLAY}
+      XAUTHORITY: ${XAUTHORITY:-$HOME/.Xauthority}
+      TURTLEBOT3_MODEL: burger
+      ROS_DOMAIN_ID: 0
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw
+      - ./ws:/ws:rw
+    command:
+      - bash
+      - -lc
+      - source /opt/ros/jazzy/setup.bash && rviz2 --ros-args -p use_sim_time:=true
+
+  teleop:
+    build: .
+    container_name: teleop
+    network_mode: host
+    stdin_open: true
+    tty: true
+    depends_on:
+      - gazebo
+    environment:
+      TURTLEBOT3_MODEL: burger
+      ROS_DOMAIN_ID: 0
+    volumes:
+      - ./ws:/ws:rw
+    command:
+      - bash
+      - -lc
+      - source /opt/ros/jazzy/setup.bash && ros2 run teleop_twist_keyboard teleop_twist_keyboard
