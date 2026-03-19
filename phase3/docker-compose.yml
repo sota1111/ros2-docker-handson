@@ -39,7 +39,7 @@ services:
     command:
       - bash
       - -lc
-      - source /opt/ros/jazzy/setup.bash && ros2 launch /ws/launch/localization.launch.py map:=/ws/maps/map.yaml init_x:=0.0 init_y:=0.0 init_yaw:=0.0
+      - source /opt/ros/jazzy/setup.bash && ros2 launch /ws/launch/localization.launch.py map:=/ws/maps/map.yaml init_x:=-2.0 init_y:=-0.5 init_yaw:=0.0
 
   rviz:
     build: .
@@ -61,7 +61,7 @@ services:
     command:
       - bash
       - -lc
-      - source /opt/ros/jazzy/setup.bash && rviz2 --ros-args -p use_sim_time:=true
+      - source /opt/ros/jazzy/setup.bash && rviz2 -d /ws/config/rviz.rviz --ros-args -p use_sim_time:=true
 
   teleop:
     build: .
