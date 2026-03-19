@@ -9,6 +9,8 @@ services:
       XAUTHORITY: ${XAUTHORITY:-$HOME/.Xauthority}
       TURTLEBOT3_MODEL: burger
       ROS_DOMAIN_ID: 0
+      # FastDDS 共有メモリを無効化 → stale /dev/shm/fastrtps_port* によるブロックを根絶
+      FASTRTPS_DEFAULT_PROFILES_FILE: /ws/config/fastdds_no_shm.xml
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw
@@ -30,6 +32,7 @@ services:
       XAUTHORITY: ${XAUTHORITY:-$HOME/.Xauthority}
       TURTLEBOT3_MODEL: burger
       ROS_DOMAIN_ID: 0
+      FASTRTPS_DEFAULT_PROFILES_FILE: /ws/config/fastdds_no_shm.xml
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw
@@ -37,7 +40,18 @@ services:
     command:
       - bash
       - -lc
-      - source /opt/ros/jazzy/setup.bash && ros2 launch /ws/launch/ekf.launch.py & sleep 2; ros2 launch /ws/launch/amcl.launch.py map:=/ws/maps/map.yaml init_x:=0.0 init_y:=0.0 init_yaw:=0.0; wait
+      # /clock が届くまで待ってから launch する。
+      # depends_on はコンテナ起動のみ保証し Gazebo の準備完了を保証しない。
+      # timeout 1 で 1 秒ずつ /clock を確認し、届き始めたら launch を開始する。
+      - >
+        source /opt/ros/jazzy/setup.bash &&
+        until timeout 1 ros2 topic echo /clock --once 2>/dev/null | grep -q 'sec:'; do
+          echo '[localization] Waiting for /clock...'; sleep 2;
+        done &&
+        echo '[localization] /clock received, starting launch' &&
+        ros2 launch /ws/launch/localization.launch.py
+        map:=/ws/maps/map.yaml init_x:=0.0 init_y:=0.0 init_yaw:=0.0
+
   rviz:
     build: .
     container_name: rviz
@@ -50,6 +64,7 @@ services:
       XAUTHORITY: ${XAUTHORITY:-$HOME/.Xauthority}
       TURTLEBOT3_MODEL: burger
       ROS_DOMAIN_ID: 0
+      FASTRTPS_DEFAULT_PROFILES_FILE: /ws/config/fastdds_no_shm.xml
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw
@@ -70,6 +85,7 @@ services:
     environment:
       TURTLEBOT3_MODEL: burger
       ROS_DOMAIN_ID: 0
+      FASTRTPS_DEFAULT_PROFILES_FILE: /ws/config/fastdds_no_shm.xml
     volumes:
       - ./ws:/ws:rw
     command:

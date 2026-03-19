@@ -16,7 +16,8 @@ amcl:
     tf_broadcast: true
 
     # TF 許容時間
-    transform_tolerance: 1.0
+    # 起動直後の TF / scan タイムスタンプのずれを吸収するため大きめに設定
+    transform_tolerance: 2.0
 
     # 差動二輪向け運動モデル
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
@@ -41,19 +42,18 @@ amcl:
     alpha5: 0.2
 
     # 起動時に初期姿勢をパラメータから与える
+    # launch 側の initial_pose.x/y/yaw で上書きされる
     set_initial_pose: true
 
     # 再起動時も必ず初期姿勢を要求する
     always_reset_initial_pose: true
 
-    # 初期姿勢
-    # map 座標系での初期位置
-    # まずは Gazebo 初期位置に合わせて 0,0,0 で試す
-    initial_pose:
-      x: 0.0
-      y: 0.0
-      z: 0.0
-      yaw: 0.0
+    # 初期姿勢 (launch 側の引数で上書きされる)
+    # ROS 2 パラメータのドット記法に合わせてフラットに記述する
+    initial_pose.x: 0.0
+    initial_pose.y: 0.0
+    initial_pose.z: 0.0
+    initial_pose.yaw: 0.0
 
     # 最後の姿勢を保存
     save_pose_rate: 0.5

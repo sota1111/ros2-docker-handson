@@ -12,6 +12,11 @@ def generate_launch_description():
             output='screen',
 
             # YAML パラメータを読み込む
-            parameters=['/ws/config/ekf.yaml'],
+            # use_sim_time を dict でも明示することで
+            # /clock が来る前にノードが誤って wall clock を使うのを防ぐ
+            parameters=[
+                '/ws/config/ekf.yaml',
+                {'use_sim_time': True},
+            ],
         )
     ])

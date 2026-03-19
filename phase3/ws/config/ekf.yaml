@@ -13,6 +13,14 @@ ekf_filter_node:
     # odom -> base_footprint の TF を publish する
     publish_tf: true
 
+    # transform_time_offset を 0 にする
+    # 0.05 にすると EKF が publish する TF のタイムスタンプが +0.05 秒ずれ、
+    # scan のタイムスタンプ t に対して TF キャッシュの最古が t+0.05 になる。
+    # → AMCL が "earlier than all the data in the transform cache" を出し続けて
+    #   全 scan を捨て、map->odom TF が永遠に出なくなる根本原因。
+    transform_time_offset: 0.0
+    transform_timeout: 0.5
+
     # robot_localization のフレーム設定
     # world_frame を odom にすることで、
     # EKF は局所的で連続な自己位置推定を担当する
