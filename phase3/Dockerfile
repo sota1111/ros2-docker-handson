@@ -31,6 +31,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-nav2-lifecycle-manager \
     # RVizでparticle表示用
     ros-jazzy-nav2-rviz-plugins \
+    # CycloneDDS (FastDDS の stale shared memory 問題を回避)
+    ros-jazzy-rmw-cyclonedds-cpp \
  && rm -rf /var/lib/apt/lists/*
 
 
