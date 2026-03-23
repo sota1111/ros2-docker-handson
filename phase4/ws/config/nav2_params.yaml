@@ -261,7 +261,7 @@ global_costmap:
 #   - ホロノミックな動作を前提とした最短経路を計算
 #
 # 代替: SmacPlanner2d (use_astar: true/false でA*/Dijkstra切替可能)
-#   plugin: "nav2_smac_planner/SmacPlanner2d"
+#   plugin: "nav2_smac_planner::SmacPlanner2D"
 #   - 格子ベースで差動二輪の運動制約を考慮可能
 # -----------------------------------------------------------------------------
 planner_server:
