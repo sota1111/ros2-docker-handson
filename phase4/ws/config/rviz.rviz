@@ -6,6 +6,10 @@ Panels:
       Expanded:
         - /Global Options1
         - /Map1
+        - /GlobalCostmap1
+        - /LocalCostmap1
+        - /GlobalPath1
+        - /LocalPath1
         - /LaserScan1
         - /ParticleCloud1
       Splitter Ratio: 0.5
@@ -23,6 +27,9 @@ Panels:
       - /Current View1
     Name: Views
     Splitter Ratio: 0.5
+  # Nav2 操作パネル: ナビゲーションの開始/中断/リカバリをボタンで操作
+  - Class: nav2_rviz_plugins/Nav2Panel
+    Name: Navigation 2
 Visualization Manager:
   Class: ""
   Displays:
@@ -44,6 +51,8 @@ Visualization Manager:
       Plane Cell Count: 10
       Reference Frame: <Fixed Frame>
       Value: true
+
+    # 静的地図 (/map)
     - Alpha: 0.699999988079071
       Class: rviz_default_plugins/Map
       Color Scheme: map
@@ -66,6 +75,121 @@ Visualization Manager:
         Value: /map_updates
       Use Timestamp: false
       Value: true
+
+    # グローバルコストマップ (/global_costmap/costmap)
+    # 地図全体に対する障害物+膨張コストを可視化
+    # 色が濃い(赤→黄)ほどコストが高く経路計画で避けられる
+    - Alpha: 0.3
+      Class: rviz_default_plugins/Map
+      Color Scheme: costmap
+      Draw Under: false
+      Enabled: true
+      Name: GlobalCostmap
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /global_costmap/costmap
+      Update Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /global_costmap/costmap_updates
+      Use Timestamp: false
+      Value: true
+
+    # ローカルコストマップ (/local_costmap/costmap)
+    # ロボット周辺3m×3mのローリングウィンドウ障害物マップ
+    - Alpha: 0.45
+      Class: rviz_default_plugins/Map
+      Color Scheme: costmap
+      Draw Under: false
+      Enabled: true
+      Name: LocalCostmap
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /local_costmap/costmap
+      Update Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /local_costmap/costmap_updates
+      Use Timestamp: false
+      Value: true
+
+    # グローバル経路 (/plan)
+    # NavFn(A*)が計算したスタートからゴールまでの大局経路
+    - Alpha: 1.0
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 0; 128; 255
+      Enabled: true
+      Head Diameter: 0.10000000149011612
+      Head Length: 0.07000000029802322
+      Length: 0.30000001192092896
+      Line Style: Lines
+      Line Width: 0.029999999329447746
+      Name: GlobalPath
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 85; 255
+      Pose Style: None
+      Radius: 0.029999999329447746
+      Shaft Diameter: 0.05000000074505806
+      Shaft Length: 0.10000000149011612
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /plan
+      Value: true
+
+    # ローカル経路 (/local_plan)
+    # DWBコントローラが選択した短期軌道
+    - Alpha: 1.0
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 0; 255; 0
+      Enabled: true
+      Head Diameter: 0.10000000149011612
+      Head Length: 0.07000000029802322
+      Length: 0.30000001192092896
+      Line Style: Lines
+      Line Width: 0.029999999329447746
+      Name: LocalPath
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 85; 255
+      Pose Style: None
+      Radius: 0.029999999329447746
+      Shaft Diameter: 0.05000000074505806
+      Shaft Length: 0.10000000149011612
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /local_plan
+      Value: true
+
+    # LiDARスキャン (/scan)
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -100,6 +224,8 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
+
+    # AMCLパーティクルクラウド (/particle_cloud)
     - Class: nav2_rviz_plugins/ParticleCloud
       Enabled: true
       Name: ParticleCloud
@@ -111,6 +237,8 @@ Visualization Manager:
         Reliability Policy: Best Effort
         Value: /particle_cloud
       Value: true
+
+    # ロボットモデル (TurtleBot3 Burger)
     - Class: rviz_default_plugins/RobotModel
       Collision Enabled: false
       Description File: ""
@@ -134,6 +262,8 @@ Visualization Manager:
       Update Interval: 0
       Value: true
       Visual Enabled: true
+
+    # TFフレーム (map → odom → base_footprint の繋がりを確認)
     - Class: rviz_default_plugins/TF
       Enabled: true
       Frame Timeout: 15
@@ -148,6 +278,7 @@ Visualization Manager:
         {}
       Update Interval: 0
       Value: true
+
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -162,6 +293,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/FocusCamera
     - Class: rviz_default_plugins/Measure
       Line color: 128; 128; 0
+    # "2D Pose Estimate" ボタン: AMCLの初期位置を手動で修正する
     - Class: rviz_default_plugins/SetInitialPose
       Topic:
         Depth: 5
@@ -170,6 +302,8 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /initialpose
+    # "2D Goal Pose" ボタン: ゴール位置・姿勢を指定して自律移動を開始する
+    # → /goal_pose トピックに Pose をパブリッシュ → bt_navigator が受信
     - Class: rviz_default_plugins/SetGoal
       Topic:
         Depth: 5

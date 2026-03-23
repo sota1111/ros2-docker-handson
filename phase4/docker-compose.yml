@@ -39,7 +39,29 @@ services:
     command:
       - bash
       - -lc
+      # init_x/y はGazeboのロボット初期スポーン位置に合わせる
       - source /opt/ros/jazzy/setup.bash && ros2 launch /ws/launch/localization.launch.py map:=/ws/maps/map.yaml init_x:=-2.0 init_y:=-0.5 init_yaw:=0.0
+
+  navigation:
+    build: .
+    container_name: navigation
+    network_mode: host
+    ipc: host
+    depends_on:
+      - localization
+    environment:
+      TURTLEBOT3_MODEL: burger
+      ROS_DOMAIN_ID: 0
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - ./ws:/ws:rw
+    command:
+      - bash
+      - -lc
+      # navigation.launch.py 内の TimerAction で 40 秒待機してから Nav2 起動
+      # 理由: localizationコンテナのEKF(t=5s)・AMCL(t=15s)が
+      #       TFキャッシュおよびmap->odom TFを確立するのを待つため
+      - source /opt/ros/jazzy/setup.bash && ros2 launch /ws/launch/navigation.launch.py
 
   rviz:
     build: .
@@ -63,12 +85,16 @@ services:
       - -lc
       - source /opt/ros/jazzy/setup.bash && rviz2 -d /ws/config/rviz.rviz --ros-args -p use_sim_time:=true
 
+  # teleop は Nav2 と cmd_vel が競合するため通常は使用しない
+  # デバッグ時のみ: docker compose run --rm teleop
   teleop:
     build: .
     container_name: teleop
     network_mode: host
     stdin_open: true
     tty: true
+    profiles:
+      - debug
     depends_on:
       - gazebo
     environment:

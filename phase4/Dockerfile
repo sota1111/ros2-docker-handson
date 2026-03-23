@@ -14,7 +14,7 @@ SHELL ["/bin/bash", "-lc"]
 # apt対話抑止
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Phase3に必要な最小パッケージのみ導入
+# Phase4に必要なパッケージを導入
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # TurtleBot3 シミュレーション
     ros-jazzy-turtlebot3 \
@@ -23,14 +23,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-turtlebot3-gazebo \
     # 手動操作
     ros-jazzy-teleop-twist-keyboard \
-    # EKF
+    # EKF (ローカル自己位置推定)
     ros-jazzy-robot-localization \
-    # AMCL関連
+    # AMCL関連 (グローバル自己位置推定)
     ros-jazzy-nav2-amcl \
     ros-jazzy-nav2-map-server \
     ros-jazzy-nav2-lifecycle-manager \
-    # RVizでparticle表示用
+    # RVizでparticle・Nav2表示用プラグイン
     ros-jazzy-nav2-rviz-plugins \
+    # Nav2 自律移動スタック一式
+    # nav2-bt-navigator, nav2-planner, nav2-controller, nav2-smoother,
+    # nav2-behaviors, nav2-costmap-2d, nav2-navfn-planner, nav2-smac-planner,
+    # nav2-waypoint-follower, nav2-velocity-smoother を含むメタパッケージ
+    ros-jazzy-navigation2 \
+    # Nav2 デフォルトBTツリーXMLと設定ファイル
+    ros-jazzy-nav2-bringup \
     # CycloneDDS (FastDDS の stale shared memory 問題を回避)
     ros-jazzy-rmw-cyclonedds-cpp \
  && rm -rf /var/lib/apt/lists/*
