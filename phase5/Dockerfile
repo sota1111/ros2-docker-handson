@@ -14,7 +14,7 @@ SHELL ["/bin/bash", "-lc"]
 # apt対話抑止
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Phase4に必要なパッケージを導入
+# Phase5に必要なパッケージを導入
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # TurtleBot3 シミュレーション
     ros-jazzy-turtlebot3 \
@@ -25,7 +25,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-teleop-twist-keyboard \
     # EKF (ローカル自己位置推定)
     ros-jazzy-robot-localization \
-    # AMCL関連 (グローバル自己位置推定)
+    # SLAM (地図生成)
+    ros-jazzy-slam-toolbox \
+    # AMCL関連 (グローバル自己位置推定 / 保存済み地図での再利用)
     ros-jazzy-nav2-amcl \
     ros-jazzy-nav2-map-server \
     ros-jazzy-nav2-lifecycle-manager \
