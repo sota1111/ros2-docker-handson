@@ -1,0 +1,180 @@
+services:
+  # ─────────────────────────────────────────────────────────────────
+  # Gazebo シミュレーター (SLAM・ナビゲーション両フェーズ共通)
+  # ─────────────────────────────────────────────────────────────────
+  gazebo:
+    build: .
+    container_name: gazebo
+    network_mode: host
+    ipc: host
+    environment:
+      DISPLAY: ${DISPLAY}
+      XAUTHORITY: ${XAUTHORITY:-$HOME/.Xauthority}
+      TURTLEBOT3_MODEL: burger
+      ROS_DOMAIN_ID: 0
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw
+      - ./ws:/ws:rw
+    command:
+      - bash
+      - -lc
+      - source /opt/ros/jazzy/setup.bash && ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
+
+  # ─────────────────────────────────────────────────────────────────
+  # フェーズ A: SLAM による地図生成
+  #   docker compose --profile slam up
+  # ─────────────────────────────────────────────────────────────────
+
+  # EKF + slam_toolbox (online_async モード)
+  # slam_toolbox が map→odom TF を発行するため AMCL は不要
+  slam:
+    profiles: [slam]
+    build: .
+    container_name: slam
+    network_mode: host
+    ipc: host
+    depends_on:
+      - gazebo
+    environment:
+      TURTLEBOT3_MODEL: burger
+      ROS_DOMAIN_ID: 0
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - ./ws:/ws:rw
+    command:
+      - bash
+      - -lc
+      # slam.launch.py が EKF(t=5s) → slam_toolbox(t=10s) の順に起動する
+      - source /opt/ros/jazzy/setup.bash && ros2 launch /ws/launch/slam.launch.py
+
+  # SLAM 観察用 RViz
+  # 地図が徐々に生成される様子を確認する
+  rviz_slam:
+    profiles: [slam]
+    build: .
+    container_name: rviz_slam
+    network_mode: host
+    ipc: host
+    depends_on:
+      - slam
+    environment:
+      DISPLAY: ${DISPLAY}
+      XAUTHORITY: ${XAUTHORITY:-$HOME/.Xauthority}
+      TURTLEBOT3_MODEL: burger
+      ROS_DOMAIN_ID: 0
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw
+      - ./ws:/ws:rw
+    command:
+      - bash
+      - -lc
+      - source /opt/ros/jazzy/setup.bash && rviz2 -d /ws/config/rviz_slam.rviz --ros-args -p use_sim_time:=true
+
+  # ─────────────────────────────────────────────────────────────────
+  # フェーズ B: 保存した地図を使った自律移動 (Nav2)
+  #   docker compose --profile nav up
+  # ─────────────────────────────────────────────────────────────────
+
+  # EKF + AMCL + map_server (保存済み地図を読み込む)
+  localization:
+    profiles: [nav]
+    build: .
+    container_name: localization
+    network_mode: host
+    ipc: host
+    depends_on:
+      - gazebo
+    environment:
+      DISPLAY: ${DISPLAY}
+      XAUTHORITY: ${XAUTHORITY:-$HOME/.Xauthority}
+      TURTLEBOT3_MODEL: burger
+      ROS_DOMAIN_ID: 0
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw
+      - ./ws:/ws:rw
+    command:
+      - bash
+      - -lc
+      # SLAM で保存した地図を使う。
+      # SLAM の座標系は Gazebo のワールド座標系と異なるため init_x/y は 0.0 にする。
+      # 起動後に RViz の "2D Pose Estimate" ツールで正確な初期位置を手動設定すること。
+      - source /opt/ros/jazzy/setup.bash && ros2 launch /ws/launch/localization.launch.py map:=/ws/maps/slam_map.yaml init_x:=0.0 init_y:=0.0 init_yaw:=0.0
+
+  # Nav2 自律移動スタック
+  navigation:
+    profiles: [nav]
+    build: .
+    container_name: navigation
+    network_mode: host
+    ipc: host
+    depends_on:
+      - localization
+    environment:
+      TURTLEBOT3_MODEL: burger
+      ROS_DOMAIN_ID: 0
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - ./ws:/ws:rw
+    command:
+      - bash
+      - -lc
+      # navigation.launch.py 内の TimerAction で 40 秒待機してから Nav2 起動
+      # 理由: localizationコンテナのEKF(t=5s)・AMCL(t=15s)が
+      #       TFキャッシュおよびmap->odom TFを確立するのを待つため
+      - source /opt/ros/jazzy/setup.bash && ros2 launch /ws/launch/navigation.launch.py
+
+  # ナビゲーション観察用 RViz (コストマップ・経路表示あり)
+  rviz_nav:
+    profiles: [nav]
+    build: .
+    container_name: rviz_nav
+    network_mode: host
+    ipc: host
+    depends_on:
+      - localization
+    environment:
+      DISPLAY: ${DISPLAY}
+      XAUTHORITY: ${XAUTHORITY:-$HOME/.Xauthority}
+      TURTLEBOT3_MODEL: burger
+      ROS_DOMAIN_ID: 0
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw
+      - ./ws:/ws:rw
+    command:
+      - bash
+      - -lc
+      - source /opt/ros/jazzy/setup.bash && rviz2 -d /ws/config/rviz.rviz --ros-args -p use_sim_time:=true
+
+  # ─────────────────────────────────────────────────────────────────
+  # テレオペ (SLAM フェーズで手動操作するために使用)
+  #   docker compose run --rm teleop
+  # Nav2 ナビゲーション中は cmd_vel が競合するため使用しない
+  # ─────────────────────────────────────────────────────────────────
+  teleop:
+    build: .
+    container_name: teleop
+    network_mode: host
+    stdin_open: true
+    tty: true
+    profiles:
+      - debug
+    depends_on:
+      - gazebo
+    environment:
+      TURTLEBOT3_MODEL: burger
+      ROS_DOMAIN_ID: 0
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - ./ws:/ws:rw
+    command:
+      - bash
+      - -lc
+      - source /opt/ros/jazzy/setup.bash && ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -p stamped:=true -r cmd_vel:=/cmd_vel

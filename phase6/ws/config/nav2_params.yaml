@@ -1,0 +1,404 @@
+# =============================================================================
+# Nav2 パラメータ設定 - TurtleBot3 Burger 向け
+# =============================================================================
+# TurtleBot3 Burger スペック:
+#   車輪半径: 0.033 m
+#   車輪間距離: 0.160 m
+#   最大速度: 直進 0.22 m/s、回転 2.84 rad/s
+#   LiDAR: 360° スキャン (LDS-01)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# BT Navigator
+# ゴール指定から行動完了までをビヘイビアツリー(BT)で制御するナビゲーター
+# RViz の "2D Goal Pose" ボタンや /goal_pose トピックでゴールを受け付ける
+# -----------------------------------------------------------------------------
+bt_navigator:
+  ros__parameters:
+    use_sim_time: true
+    global_frame: map
+    robot_base_frame: base_footprint
+    odom_topic: /odom
+
+    # BT のメインループ周期 [ms]
+    bt_loop_duration: 10
+    # アクションサーバのデフォルトタイムアウト [ms]
+    default_server_timeout: 20
+    # サービス待機タイムアウト [ms]
+    wait_for_service_timeout: 1000
+    # ナビゲーションアクションのタイムアウト [s]
+    action_server_result_timeout: 900.0
+
+    # 使用するナビゲーター: 1点ゴール / 複数ウェイポイント
+    navigators: ['navigate_to_pose', 'navigate_through_poses']
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
+    navigate_through_poses:
+      plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
+
+    # エラーコード名 (BT からプランナー・コントローラのエラーを識別)
+    error_code_names:
+      - compute_path_error_code
+      - follow_path_error_code
+
+# -----------------------------------------------------------------------------
+# Controller Server (ローカルプランナー)
+# グローバルパスに沿って走行するための速度指令を生成する
+# プラグイン: DWBLocalPlanner (Dynamic Window Based)
+#   ・ロボットの運動学制約と障害物を考慮してサンプリング評価
+#   ・差動二輪ロボットに適した代表的なローカルプランナー
+# -----------------------------------------------------------------------------
+controller_server:
+  ros__parameters:
+    use_sim_time: true
+
+    # TwistStamped を使用する (TurtleBot3 Jazzy は TwistStamped を要求)
+    enable_stamped_cmd_vel: true
+
+    # 速度指令の生成周波数 [Hz]
+    controller_frequency: 20.0
+
+    # 速度のゼロ判定閾値 (この値以下の速度は停止とみなす)
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+
+    # 障害物に近づいたとき等の許容失敗回数
+    failure_tolerance: 0.3
+
+    progress_checker_plugins: ["progress_checker"]
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    # 進捗チェッカー: 一定時間内に一定距離動けなければ失敗と判定
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5   # 最低移動距離 [m]
+      movement_time_allowance: 10.0   # 判定時間 [s]
+
+    # ゴールチェッカー: ゴールに十分近づいたか判定
+    general_goal_checker:
+      stateful: true
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.25    # XY位置の許容誤差 [m]
+      yaw_goal_tolerance: 0.25   # 姿勢角の許容誤差 [rad]
+
+    # DWBローカルプランナー設定
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: true
+
+      # 速度制限 (TurtleBot3 Burgerの仕様に合わせる)
+      min_vel_x: 0.0
+      min_vel_y: 0.0
+      max_vel_x: 0.22        # 最大前進速度 [m/s]
+      max_vel_y: 0.0         # 差動二輪なので横移動なし
+      max_vel_theta: 1.0     # 最大回転速度 [rad/s]
+      min_speed_xy: 0.0
+      max_speed_xy: 0.22
+      min_speed_theta: 0.0
+
+      # 加速度制限
+      acc_lim_x: 2.5
+      acc_lim_y: 0.0
+      acc_lim_theta: 3.2
+      decel_lim_x: -2.5
+      decel_lim_y: 0.0
+      decel_lim_theta: -3.2
+
+      # サンプリング数 (多いほど精度UP・計算コストUP)
+      vx_samples: 20
+      vy_samples: 5
+      vtheta_samples: 20
+
+      # 軌道シミュレーション時間 [s]
+      sim_time: 1.7
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+
+      transform_tolerance: 0.2
+      xy_goal_tolerance: 0.25
+      trans_stopped_velocity: 0.25
+      short_circuit_trajectory_evaluation: true
+      stateful: true
+
+      # 評価クライテリア (軌道のスコアリング関数)
+      # 右から順に: 障害物回避→振動抑制→ゴール方向→パス追従→ゴール距離
+      critics:
+        ["RotateToGoal", "Oscillation", "BaseObstacle",
+         "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.1
+      GoalAlign.scale: 24.0
+      GoalAlign.forward_point_distance: 0.1
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+
+# -----------------------------------------------------------------------------
+# Local Costmap
+# ロボット周辺のローリングウィンドウ障害物マップ
+# LiDARスキャンから動的障害物を検出・膨張してコントローラに提供
+# -----------------------------------------------------------------------------
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: true
+
+      # 更新・配信周波数 [Hz]
+      update_frequency: 5.0
+      publish_frequency: 2.0
+
+      # ローカルコストマップはodomフレームで追跡 (ロボットとともに移動)
+      global_frame: odom
+      robot_base_frame: base_footprint
+
+      # ローリングウィンドウ: ロボット中心で常に3m×3mの範囲を保持
+      rolling_window: true
+      width: 3       # [m]
+      height: 3      # [m]
+      resolution: 0.05  # [m/cell]
+
+      # ロボットの外形半径 (膨張レイヤーのベース)
+      robot_radius: 0.22
+
+      plugins: ["voxel_layer", "inflation_layer"]
+
+      # 障害物レイヤー: LiDARスキャンから障害物を検出
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: true
+        publish_voxel_map: true
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        max_obstacle_height: 2.0
+        mark_threshold: 0
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: true            # 障害物が消えたらクリア
+          marking: true             # 障害物を書き込む
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0   # レイトレーシング最大距離 [m]
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5   # 障害物として登録する最大距離 [m]
+          obstacle_min_range: 0.0
+
+      # 膨張レイヤー: 障害物周囲にコストグラデーションを付与
+      # プランナー・コントローラが壁から安全距離を保って走るようにする
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0   # コスト減衰率 (大きいほど急激に下がる)
+        inflation_radius: 0.55     # 膨張半径 [m] (robot_radius より大きく)
+
+      always_send_full_costmap: true
+
+# -----------------------------------------------------------------------------
+# Global Costmap
+# 地図全体に対する静的+動的障害物マップ
+# グローバルプランナーが経路計算に使用する
+# -----------------------------------------------------------------------------
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: true
+
+      # 更新・配信周波数 (グローバルは低頻度でOK)
+      update_frequency: 1.0
+      publish_frequency: 1.0
+
+      # グローバルコストマップはmapフレームで固定
+      global_frame: map
+      robot_base_frame: base_footprint
+      robot_radius: 0.22
+      resolution: 0.05
+
+      # 未知領域を通る経路計画を許可
+      track_unknown_space: true
+
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+
+      # 静的レイヤー: AMCLが配信する/mapトピックを使用
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+
+      # 障害物レイヤー: LiDARスキャンから動的障害物を追加
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
+
+      # 膨張レイヤー
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.55
+
+      always_send_full_costmap: true
+
+# -----------------------------------------------------------------------------
+# Planner Server (グローバルプランナー)
+# スタートからゴールまでの大局的な経路を計算する
+#
+# NavfnPlanner: A* アルゴリズムベースの格子状経路計画
+#   - シンプルで理解しやすい古典的手法
+#   - ホロノミックな動作を前提とした最短経路を計算
+#
+# 代替: SmacPlanner2d (use_astar: true/false でA*/Dijkstra切替可能)
+#   plugin: "nav2_smac_planner::SmacPlanner2D"
+#   - 格子ベースで差動二輪の運動制約を考慮可能
+# -----------------------------------------------------------------------------
+planner_server:
+  ros__parameters:
+    use_sim_time: true
+    planner_plugins: ["GridBased"]
+
+    GridBased:
+      plugin: "nav2_navfn_planner::NavfnPlanner"
+      tolerance: 0.5        # ゴール周辺の許容距離 [m]
+      use_astar: true        # true=A*, false=Dijkstra
+      allow_unknown: true    # 未知領域を通る経路を許可
+
+# -----------------------------------------------------------------------------
+# Smoother Server
+# グローバルプランナーが生成したパスを滑らかにする
+# 格子状の折れ曲がりを取り除きロボットが走りやすい曲線経路にする
+# -----------------------------------------------------------------------------
+smoother_server:
+  ros__parameters:
+    use_sim_time: true
+    smoother_plugins: ["simple_smoother"]
+
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      tolerance: 1.0e-10
+      max_its: 1000
+      do_refinement: true
+
+# -----------------------------------------------------------------------------
+# Behavior Server (リカバリ行動)
+# ナビゲーションが行き詰まった場合の回復動作を提供する
+#   - spin: その場回転でリカバリ
+#   - backup: 後退
+#   - drive_on_heading: 指定方向への前進
+#   - wait: 一定時間待機
+#   - assisted_teleop: 手動操作のサポート
+# -----------------------------------------------------------------------------
+behavior_server:
+  ros__parameters:
+    use_sim_time: true
+
+    # TwistStamped を使用する (controller_server と型を統一)
+    enable_stamped_cmd_vel: true
+
+    local_costmap_topic: local_costmap/costmap_raw
+    global_costmap_topic: global_costmap/costmap_raw
+    local_footprint_topic: local_costmap/published_footprint
+    global_footprint_topic: global_costmap/published_footprint
+    cycle_frequency: 10.0
+
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    assisted_teleop:
+      plugin: "nav2_behaviors::AssistedTeleop"
+
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_footprint
+    transform_tolerance: 0.1
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+# -----------------------------------------------------------------------------
+# Waypoint Follower
+# 複数のウェイポイントを順番に訪問する
+# /navigate_through_poses アクションで使用
+# -----------------------------------------------------------------------------
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: true
+    loop_rate: 20
+    stop_on_failure: false
+    action_server_result_timeout: 900.0
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: true
+      waypoint_pause_duration: 200  # ウェイポイント到達後の待機時間 [ms]
+
+# -----------------------------------------------------------------------------
+# Velocity Smoother
+# コントローラが生成した速度指令を加速度制限に従い滑らかにする
+# 急発進・急停止を防いでロボットへの負荷を軽減する
+#
+# 速度フロー:
+#   controller_server → /cmd_vel_nav → velocity_smoother → /cmd_vel → Gazebo
+# -----------------------------------------------------------------------------
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: true
+
+    # TwistStamped を使用する (入力: cmd_vel_nav, 出力: cmd_vel)
+    # Gazebo の TurtleBot3 プラグインは TwistStamped を要求するため必須
+    enable_stamped_cmd_vel: true
+
+    smoothing_frequency: 20.0
+    scale_velocities: false
+    feedback: "OPEN_LOOP"
+
+    # 最大速度 [vx, vy, vtheta]
+    max_velocity: [0.22, 0.0, 1.0]
+    min_velocity: [-0.22, 0.0, -1.0]
+
+    # 最大加速度 / 最大減速度
+    max_accel: [2.5, 0.0, 3.2]
+    max_decel: [-2.5, 0.0, -3.2]
+
+    odom_topic: "odom"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+
+# -----------------------------------------------------------------------------
+# Lifecycle Manager (Navigation)
+# Nav2ノード群を ordered に configure/activate する
+# AMCLのlifecycle_managerとは別インスタンス (名前で区別)
+# 起動順: controller → smoother → planner → behavior → bt_navigator → ...
+# -----------------------------------------------------------------------------
+lifecycle_manager_navigation:
+  ros__parameters:
+    use_sim_time: true
+    autostart: true
+    node_names:
+      - controller_server
+      - smoother_server
+      - planner_server
+      - behavior_server
+      - bt_navigator
+      - waypoint_follower
+      - velocity_smoother
