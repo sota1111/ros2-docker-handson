@@ -1,7 +1,7 @@
 # ROS2 Jazzy ハンズオン
 
 TurtleBot3を使ったROS2 Jazzy入門ハンズオンです。
-Phase 0〜4を通じて、シミュレーション環境の構築からグローバル自己位置推定・自律移動までを段階的に学びます。
+Phase 0〜5を通じて、シミュレーション環境の構築からSLAMによる地図生成・自律移動までを段階的に学びます。
 
 ---
 
@@ -14,6 +14,7 @@ Phase 0〜4を通じて、シミュレーション環境の構築からグロー
 | [Phase 2](#phase-2-ekfによるローカル自己位置推定) | EKFによるローカル自己位置推定 | robot-localization |
 | [Phase 3](#phase-3-amclによるグローバル自己位置推定) | AMCLによるグローバル自己位置推定 | nav2-amcl, nav2-map-server |
 | [Phase 4](#phase-4-nav2による自律移動) | Nav2による自律移動 | navigation2 (nav2-planner, nav2-controller, nav2-bt-navigator) |
+| [Phase 5](#phase-5-slam_toolboxによる地図生成) | SLAMによる地図生成と自律移動 | slam-toolbox |
 
 ---
 
@@ -425,6 +426,181 @@ t=40s: Nav2スタック起動 (navigation.launch.py内のTimerAction)
 
 ---
 
+## Phase 5: slam_toolboxによる地図生成
+
+### 概要
+
+これまでのフェーズではあらかじめ用意された地図を使って自己位置推定・自律移動を行ってきました。
+Phase 5 では **SLAM（Simultaneous Localization and Mapping）** を使い、
+ロボット自身が未知の環境を探索しながらリアルタイムで地図を生成します。
+生成した地図を保存して、Phase 4 と同じ Nav2 スタックで自律移動に再利用するまでの一連の流れを学びます。
+
+### 構成ファイル
+
+```
+phase5/
+├── Dockerfile
+├── docker-compose.yml
+└── ws/
+    ├── config/
+    │   ├── ekf.yaml            (Phase3から継続)
+    │   ├── amcl.yaml           (Phase3から継続)
+    │   ├── nav2_params.yaml    (Phase4から継続)
+    │   ├── slam.yaml           ★ slam_toolbox 設定 (新規)
+    │   ├── rviz.rviz           (Phase4から継続)
+    │   └── rviz_slam.rviz      ★ SLAM観察用RViz設定 (新規)
+    ├── launch/
+    │   ├── ekf.launch.py       (Phase3から継続)
+    │   ├── amcl.launch.py      (Phase3から継続)
+    │   ├── localization.launch.py (Phase3から継続)
+    │   ├── navigation.launch.py   (Phase4から継続)
+    │   └── slam.launch.py      ★ SLAMスタック起動 (新規)
+    └── maps/
+        ├── map.pgm / map.yaml       (Phase3の事前用意地図)
+        ├── slam_map.pgm             ★ SLAMで生成・保存する地図
+        └── slam_map.yaml
+```
+
+### システム構成
+
+```
+Gazebo (シミュレーター)
+  ├─ /scan (LiDAR)   ──→ slam_toolbox ──→ /map (Occupancy Grid)
+  ├─ /odom           ──→ EKF          ──→ odom→base_footprint TF
+  ├─ /imu            ──→ EKF          ┘
+  └─ /clock
+
+slam_toolbox (Lifecycle ノード)
+  ├─ 入力: /scan + odom→base_footprint TF
+  ├─ スキャンマッチング → 現在位置推定
+  ├─ ループ検出 → 累積誤差を修正 (Ceres Solver)
+  ├─ 出力: /map (Occupancy Grid, 5秒ごと更新)
+  └─ 出力: map→odom TF (AMCLの代わり)
+
+TFツリー (SLAMフェーズ):
+  map ──(slam_toolbox)──→ odom ──(EKF)──→ base_footprint ──→ base_scan
+```
+
+> Phase 3/4 では AMCL が `map→odom` TF を発行していましたが、
+> SLAM モードでは slam_toolbox 自身が発行するため AMCL は不要です。
+
+### slam.yaml の主な設定
+
+```yaml
+slam_toolbox:
+  ros__parameters:
+    # ソルバー
+    solver_plugin: solver_plugins::CeresSolver
+
+    # フレーム・トピック
+    scan_topic: /scan
+    odom_frame: odom
+    base_frame: base_footprint
+    map_frame: map
+    mode: mapping          # online_async モード
+
+    # 地図設定
+    map_update_interval: 5.0   # RViz更新間隔 [s]
+    resolution: 0.05           # 1セル = 5cm
+    max_laser_range: 3.5       # TurtleBot3 Burger LiDAR 最大距離 [m]
+
+    # スキャンマッチング条件
+    minimum_travel_distance: 0.5   # 0.5m 移動ごとにスキャン処理
+    minimum_travel_heading: 0.5    # 0.5rad 回転ごとにスキャン処理
+
+    # ループ検出
+    do_loop_closing: true
+```
+
+### docker-compose.yml（プロファイル構成）
+
+| プロファイル | サービス | 役割 |
+|------------|---------|------|
+| `slam` | `gazebo` | TurtleBot3シミュレータ |
+| `slam` | `slam` | EKF + slam_toolbox + lifecycle_manager |
+| `slam` | `rviz_slam` | SLAM観察用RViz（地図生成をリアルタイム確認） |
+| `nav` | `gazebo` | TurtleBot3シミュレータ |
+| `nav` | `localization` | EKF + AMCL + MapServer（slam_map.yaml を読み込み） |
+| `nav` | `navigation` | Nav2スタック全体（Phase4と同一） |
+| `nav` | `rviz_nav` | Nav2パネル付きRViz |
+| `debug` | `teleop` | キーボード遠隔操作（SLAM探索時に使用） |
+
+### 実行手順
+
+**フェーズ A: SLAMで地図を生成する**
+
+```bash
+cd phase5
+
+# SLAMスタック起動
+docker compose --profile slam up
+
+# 別ターミナルでテレオペ起動（探索用）
+docker compose run --rm teleop
+```
+
+起動シーケンス（自動）:
+
+| 経過時間 | 起動内容 |
+|----------|---------|
+| t = 0s | Gazebo 起動 |
+| t = 5s | EKF 起動 → `odom → base_footprint` TF 確立 |
+| t = 10s | slam_toolbox + lifecycle_manager 起動 |
+| t = 10s〜 | lifecycle_manager が slam_toolbox を configure → activate |
+
+RViz で白・黒・グレーの地図が表示されることを確認し、ロボットを手動操作して環境を探索します。
+
+| 色 | 意味 |
+|----|------|
+| 白 | 走行可能な自由空間 |
+| 黒 | 壁・障害物 |
+| グレー | 未探索領域 |
+| 赤い点 | リアルタイムのLiDARスキャン点 |
+
+**フェーズ B: 地図を保存する**
+
+```bash
+# コンテナ内で map_saver_cli を実行（ホストマシンには入っていない）
+docker compose exec slam bash -lc "
+  source /opt/ros/jazzy/setup.bash
+  ros2 run nav2_map_server map_saver_cli -f /ws/maps/slam_map"
+
+# SLAMスタック停止
+docker compose --profile slam down
+```
+
+成功すると `ws/maps/slam_map.pgm` と `ws/maps/slam_map.yaml` が生成されます。
+
+**フェーズ C: 保存した地図で自律移動する**
+
+```bash
+docker compose --profile nav up
+```
+
+> **重要:** SLAM 座標系と Gazebo ワールド座標系は異なります。
+> Nav2 起動後は RViz の **"2D Pose Estimate"** ツールで初期位置を手動設定し、
+> AMCLパーティクルが収束したことを確認してから **"2D Goal Pose"** でゴールを指定してください。
+
+### Phase 3/4 との違い
+
+```
+Phase 3/4: 既存の地図 → AMCL で自己位置推定 → Nav2 で自律移動
+
+Phase 5:   未知環境 → SLAM で地図生成 → 地図を保存 → AMCL + Nav2 で自律移動
+```
+
+### 学習ポイント
+
+- スキャンマッチング（LiDAR点群の照合）によるSLAMの仕組み
+- Occupancy Grid（確率的占有格子地図）の生成原理
+- ループ検出とグラフ最適化（Ceres Solver）による累積誤差の修正
+- slam_toolboxのLifecycleノード管理（configure→activate）
+- `map_saver_cli` による地図ファイル（PGM/YAML）の保存
+- SLAM座標系とGazeboワールド座標系の違いへの対処
+- Dockerプロファイル（`--profile slam` / `--profile nav`）による起動切り替え
+
+---
+
 ## 技術スタックまとめ
 
 ```
@@ -440,6 +616,7 @@ ROS2 Jazzy
 ├── 障害物回避: nav2_costmap_2d
 ├── リカバリ: nav2_behaviors
 ├── 可視化: RViz2 + nav2_rviz_plugins
+├── SLAM: slam_toolbox (async_slam_toolbox_node)
 ├── ミドルウェア: CycloneDDS
 └── コンテナ化: Docker / Docker Compose
 ```
