@@ -1,0 +1,95 @@
+amcl:
+  ros__parameters:
+    # Gazebo の /clock を使う
+    use_sim_time: true
+
+    # 公式ドキュメント記載の基本フレーム設定
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+
+    # LaserScan の topic
+    scan_topic: scan
+    map_topic: map
+
+    # AMCL が map -> odom の TF を publish する
+    tf_broadcast: true
+
+    # TF 許容時間
+    # 起動直後の TF / scan タイムスタンプのずれを吸収するため大きめに設定
+    transform_tolerance: 2.0
+
+    # 差動二輪向け運動モデル
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+
+    # レーザモデル
+    laser_model_type: "likelihood_field"
+
+    # 粒子数: min を小さく・max を大きくして散布→収束の落差を大きくする
+    # 収束時は ~200 粒子に絞られ、散布時は 5000 粒子に広がるため視覚的に分かりやすい
+    min_particles: 200
+    max_particles: 5000
+    max_beams: 60
+
+    # 5cm / 5deg 動くたびに更新 → ゆっくり動かすだけで収束過程が観察できる
+    update_min_d: 0.05
+    update_min_a: 0.05
+
+    # 毎更新ステップでリサンプリングして収束を速める
+    resample_interval: 1
+
+    # 運動ノイズを小さくして収束しやすくする
+    # alpha1/2: 回転由来ノイズ、alpha3/4: 並進由来ノイズ
+    # 大きいと粒子が広がりっぱなしになるため 0.1 に下げる
+    alpha1: 0.1
+    alpha2: 0.1
+    alpha3: 0.1
+    alpha4: 0.1
+    alpha5: 0.1
+
+    # レーザ尤度場モデルの重み調整
+    # z_hit を高くするとスキャン一致度が強く効いて収束が速まる
+    laser_z_hit: 0.9
+    laser_z_rand: 0.05
+    laser_sigma_hit: 0.2
+
+    # 起動時に初期姿勢をパラメータから与える
+    # launch 側の initial_pose.x/y/yaw で上書きされる
+    set_initial_pose: true
+
+    # 再起動時も必ず初期姿勢を要求する
+    always_reset_initial_pose: true
+
+    # 初期姿勢 (launch 側の引数で上書きされる)
+    # ROS 2 パラメータのドット記法に合わせてフラットに記述する
+    initial_pose.x: 0.0
+    initial_pose.y: 0.0
+    initial_pose.z: 0.0
+    initial_pose.yaw: 0.0
+
+    # 最後の姿勢を保存
+    save_pose_rate: 0.5
+
+    # 地図再読込を許可
+    first_map_only: false
+
+map_server:
+  ros__parameters:
+    # Gazebo の /clock を使う
+    use_sim_time: true
+
+    # launch 側から上書きするため空文字にしておく
+    yaml_filename: ""
+
+lifecycle_manager_localization:
+  ros__parameters:
+    # Gazebo の /clock を使う
+    use_sim_time: true
+
+    # 起動時に自動で active まで持っていく
+    autostart: true
+
+    # 公式ドキュメント通り、起動順を配列で与える
+    node_names:
+      - map_server
+      - amcl
