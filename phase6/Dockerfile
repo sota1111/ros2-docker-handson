@@ -42,6 +42,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-nav2-bringup \
     # CycloneDDS (FastDDS の stale shared memory 問題を回避)
     ros-jazzy-rmw-cyclonedds-cpp \
+    # Phase6 REST API ブリッジ用
+    # FastAPI: ASGI フレームワーク（REST エンドポイント定義）
+    python3-fastapi \
+    # Uvicorn: ASGI サーバー（FastAPI の実行環境）
+    python3-uvicorn \
+    # Pydantic: リクエスト/レスポンスのバリデーション（FastAPI が内部利用）
+    python3-pydantic \
  && rm -rf /var/lib/apt/lists/*
 
 

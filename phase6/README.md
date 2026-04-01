@@ -1,506 +1,309 @@
-# Phase 5: SLAM による地図生成（slam_toolbox）
+# Phase 6: REST API ブリッジ（外部システムからロボットを HTTP で制御）
 
-## 概要
+## Phase 5 からの変更点
 
-これまでのフェーズでは「あらかじめ用意された地図」を使って自己位置推定や自律移動を行ってきました。
-Phase 5 では **SLAM（Simultaneous Localization and Mapping）** を使い、
-ロボット自身が未知の環境を探索しながらリアルタイムで地図を生成します。
+Phase 5 では RViz の GUI でゴールを指定していました。
+Phase 6 では **HTTP リクエスト** でロボットを操作できるようにします。
+これにより、Web アプリ・Python スクリプト・管理システムなど ROS2 を知らない外部システムからもロボットを制御できます。
 
-生成した地図は保存して Phase 4 と同じ Nav2 スタックで再利用できます。
+### 追加・変更したファイル
 
-### このフェーズで学ぶこと
-
-| テーマ | 内容 |
-|--------|------|
-| SLAM の仕組み | スキャンマッチングでロボットの位置と地図を同時推定する原理 |
-| slam_toolbox | ROS 2 標準の SLAM 実装（online_async モード） |
-| Occupancy Grid | LiDAR データから確率的に生成される占有格子地図 |
-| ループ検出 | 既訪場所の再認識で累積誤差を修正する仕組み |
-| 地図の保存と再利用 | `map_saver_cli` で PGM/YAML を保存し Nav2 で再利用する |
-| SLAM 座標系 | SLAM が作る座標系と Gazebo ワールド座標系の違い |
-
-### Phase 3/4 との違い
-
-```
-Phase 3/4: 既存の地図 → AMCL で自己位置推定 → Nav2 で自律移動
-                ↑
-           あらかじめ用意が必要
-
-Phase 5:   未知環境 → SLAM で地図生成 → 地図を保存 → Nav2 で自律移動
-                ↑
-           ロボット自身が地図を作る
-```
-
-### システム構成
-
-```
-Gazebo (シミュレーター)
-  ├─ /scan (LiDAR)   ──→ slam_toolbox ──→ /map (Occupancy Grid)
-  ├─ /odom           ──→ EKF          ──→ odom→base_footprint TF
-  ├─ /imu            ──→ EKF          ┘
-  └─ /clock
-
-slam_toolbox (Lifecycle ノード)
-  ├─ 入力: /scan + odom→base_footprint TF
-  ├─ スキャンマッチング → 現在位置推定
-  ├─ ループ検出 → 累積誤差を修正
-  ├─ 出力: /map (Occupancy Grid, 5秒ごと更新)
-  └─ 出力: map→odom TF (AMCLの代わり)
-
-lifecycle_manager_slam
-  └─ slam_toolbox を configure → activate する
-     (activate しないと /scan を購読せず地図を生成しない)
-
-TFツリー (SLAMフェーズ):
-  map ──(slam_toolbox)──→ odom ──(EKF)──→ base_footprint ──→ base_scan
-```
-
----
-
-## フェーズ A: SLAM で地図を生成する
-
-### ステップ 1: SLAM スタックを起動する
-
-```bash
-cd phase5
-docker compose --profile slam up
-```
-
-**起動シーケンス（自動）:**
-
-| 経過時間 | 起動内容 |
+| ファイル | 変更内容 |
 |----------|---------|
-| t = 0s | Gazebo、シミュレーター起動 |
-| t = 5s | EKF 起動 → `odom → base_footprint` TF 確立 |
-| t = 10s | slam_toolbox + lifecycle_manager 起動 |
-| t = 10s~ | lifecycle_manager が slam_toolbox を configure → activate |
+| `ws/scripts/web_bridge_node.py` | **新規追加** — FastAPI + ROS2 アクションクライアント |
+| `Dockerfile` | `python3-fastapi` / `python3-uvicorn` / `python3-pydantic` を追加 |
+| `docker-compose.yml` | `api_bridge` サービスを追加（nav プロファイル） |
 
-slam_toolbox が正常に起動すると以下のログが出ます:
+### Phase 5 との構成の違い
 
 ```
-[lifecycle_manager_slam]: Managed nodes are active
-[slam_toolbox]: Registering sensor: [Custom Described Lidar]
+【Phase 5】
+  RViz (GUI)
+    └─ 2D Goal Pose ──→ /navigate_to_pose (Action) ──→ ロボット移動
+
+【Phase 6】
+  curl / Python / Web アプリ
+    └─ POST /move_to ──→ web_bridge_node ──→ /navigate_to_pose (Action) ──→ ロボット移動
+                              ↑
+                     FastAPI + ROS2 ノード (api_bridge コンテナ)
 ```
 
-> RViz が開いてから **約 15 秒**で地図の初期領域が表示されます。
-
-### ステップ 2: RViz で SLAM の様子を確認する
-
-RViz (`rviz_slam` コンテナ) が起動したら以下を確認してください。
-
-**表示の意味:**
-
-| 色 | 意味 |
-|----|------|
-| 白 | 走行可能な自由空間（LiDAR が貫通した = 障害物なし） |
-| 黒 | 壁・障害物（LiDAR が反射した） |
-| グレー | 未探索領域（まだスキャンが届いていない） |
-| 赤い点 | 現在の LiDAR スキャン点（リアルタイム） |
-
-> 起動直後はロボットの周辺だけが白くなり、残りはグレーです。
-> ロボットを動かすと白い領域が広がっていきます。
-
-### ステップ 3: ロボットを手動操作して環境を探索する
-
-**別のターミナル**でテレオペを起動します:
-
-```bash
-cd phase5
-docker compose run --rm teleop
-```
-
-キー操作:
-
-| キー | 動作 |
-|------|------|
-| `i` | 前進 |
-| `,` | 後退 |
-| `j` | 左回転 |
-| `l` | 右回転 |
-| `k` | 停止 |
-| `q` / `z` | 速度を上げる / 下げる |
-
-**探索のコツ:**
-
-- ゆっくり動くとスキャンマッチング精度が上がる
-- 壁に沿って一周すると地図の輪郭が完成する
-- 同じ場所に複数の方向から戻るとループ検出が働く
-- RViz でグレーの領域がなくなるまで探索する
+Phase 5 の RViz による操作は引き続き利用できます。Phase 6 はそこに HTTP 経由の操作経路を追加したものです。
 
 ---
 
-## フェーズ B: 地図を保存する
-
-環境を一周して地図が完成したら保存します。
-
-### ステップ 4: 地図を保存する
-
-SLAM が起動中のまま、**別のターミナル**で以下を実行:
-
-```bash
-# コンテナ内で実行する（ホストマシンには nav2_map_server が入っていない）
-docker compose exec slam bash -lc "
-  source /opt/ros/jazzy/setup.bash
-  ros2 run nav2_map_server map_saver_cli -f /ws/maps/slam_map"
-```
-
-成功すると以下の 2 ファイルが作成されます:
+## システム構成
 
 ```
-ws/maps/
-  ├── slam_map.pgm   ← 地図画像 (白黒グレースケール)
-  └── slam_map.yaml  ← メタデータ (解像度・原点など)
+docker compose --profile nav up で起動するコンテナ:
+
+  gazebo        Gazebo シミュレーター（ロボット・センサー）
+  localization  EKF + AMCL + map_server（自己位置推定）
+  navigation    Nav2 スタック（経路計画・制御）
+  rviz_nav      RViz（可視化・手動ゴール指定）
+  api_bridge    FastAPI サーバー ★ Phase 6 で追加
 ```
 
-YAML ファイルの中身の例:
+### api_bridge コンテナの内部構造
 
-```yaml
-image: slam_map.pgm
-mode: trinary
-resolution: 0.05        # 1セル = 5cm
-origin: [-0.94, -2.06, 0]   # 地図左下隅の座標 (SLAM座標系)
-negate: 0
-occupied_thresh: 0.65   # この確率以上 → 障害物
-free_thresh: 0.25       # この確率以下 → 自由空間
+```
+api_bridge コンテナ
+  ├─ [メインスレッド] Uvicorn (ポート 8000)
+  │     GET  /health   → 死活確認
+  │     POST /move_to  → ゴール座標を受け取る
+  │
+  └─ [バックグラウンドスレッド] ROS2 MultiThreadedExecutor
+        web_bridge_node
+          └─ ActionClient → navigate_to_pose → Nav2
 ```
 
-### ステップ 5: SLAM を停止する
-
-```bash
-docker compose --profile slam down
-```
+`POST /move_to` を受け取ると、`NavigateToPose` アクションゴールを Nav2 に送信して即座に `accepted` を返します（移動完了は待ちません）。
 
 ---
 
-## フェーズ C: 保存した地図で自律移動する
+## 起動手順
 
-### ステップ 6: Nav2 スタックを起動する
+### ステップ 1: 起動
 
 ```bash
 docker compose --profile nav up
 ```
 
-**起動シーケンス（自動）:**
+**起動シーケンス:**
 
 | 経過時間 | 起動内容 |
 |----------|---------|
-| t = 0s | Gazebo 起動 |
-| t = 5s | EKF 起動 → `odom → base_footprint` TF 確立 |
+| t = 0s  | Gazebo 起動 |
+| t = 5s  | EKF 起動 → `odom → base_footprint` TF 確立 |
 | t = 15s | AMCL + map_server 起動（`slam_map.yaml` 読み込み） |
-| t = 40s | **Nav2 スタック起動**（コストマップ・プランナー・コントローラ） |
+| t = 40s | Nav2 スタック起動 |
+| t = 40s | **api_bridge 起動** → ポート 8000 で待機開始 |
 
-### ステップ 7: RViz で初期位置を設定する
+### ステップ 2: RViz で初期位置を設定
 
-**重要: SLAM 座標系と Gazebo ワールド座標系は異なります**
+AMCL が自己位置を推定するため、最初に RViz で初期位置を設定する必要があります。
 
-```
-Gazebo ワールド座標: ロボットスポーン位置 = (-2.0, -0.5)
-SLAM 座標系:         SLAM開始時の位置を基準に独自の座標を持つ
-                     → 両者は一致しない
-```
-
-そのため、Nav2 起動後は必ず RViz で初期位置を手動設定してください:
-
-1. RViz (`rviz_nav` コンテナ) が開いたら、地図上でロボットの姿を確認する
+1. `rviz_nav` コンテナの RViz が開いたことを確認
 2. ツールバーの **"2D Pose Estimate"** をクリック
-3. Gazebo でロボットが実際にいる場所に対応する地図上の位置をクリック＆ドラッグして向きを指定
-4. AMCL のパーティクル（赤い点群）が収束すれば自己位置推定が成立
+3. 地図上のロボットの実際の位置をクリック＆ドラッグして向きを指定
+4. AMCL のパーティクル（赤い点群）が収束すれば準備完了
 
-### ステップ 8: 自律移動を試す
+### ステップ 3: API サーバーの死活確認
 
-1. AMCL パーティクルが収束したことを確認
-2. **`2D Goal Pose`** ツールでゴールを指定して自律移動を開始
+```bash
+curl http://localhost:8000/health
+```
 
-> Phase 4 と同じ操作です。今度は自分で作った地図の上で動きます。
+```json
+{"status": "ok", "ros2_node": true}
+```
+
+### ステップ 4: HTTP でロボットを移動させる
+
+```bash
+curl -X POST http://localhost:8000/move_to \
+  -H "Content-Type: application/json" \
+  -d '{"x": 1.0, "y": 2.0, "yaw": 0.0}'
+```
+
+```json
+{
+  "status": "accepted",
+  "goal": {"x": 1.0, "y": 2.0, "yaw": 0.0},
+  "message": "ゴールを受け付けました。ロボットが移動を開始します。"
+}
+```
+
+RViz でロボットが目標座標に向けて動き始めることを確認してください。
 
 ---
 
-## ハンズオン 1: SLAM の仕組みを理解する（スキャンマッチング）
+## API リファレンス
 
-### 概念
+### GET /health
 
-slam_toolbox は新しいスキャンが来るたびに以下を行います:
-
-```
-新スキャン到着
-    ↓
-前回スキャンとの差分を計算
-    ↓
-ロボットの移動量を推定 (スキャンマッチング)
-    ↓
-推定位置で地図を更新 (Occupancy Grid)
-    ↓
-map→odom TF を更新
-```
-
-この処理は **EKF のオドメトリとは独立して**行われます。
-スキャンマッチングは LiDAR だけで位置を推定できるため、
-ホイールのスリップがあっても地図精度を保てます。
-
-### 実験: スキャン処理の最小移動量を変えてみる
-
-`ws/config/slam.yaml` を変更します:
-
-```yaml
-# デフォルト: 0.5m 移動するたびにスキャン処理
-minimum_travel_distance: 0.5  # → 0.1 に下げる
-
-# デフォルト: 0.5rad 回転するたびにスキャン処理
-minimum_travel_heading: 0.5   # → 0.1 に下げる
-```
-
-変更後に SLAM を再起動:
+サーバーと ROS2 ノードの死活確認。
 
 ```bash
-docker compose --profile slam down
-docker compose --profile slam up
+curl http://localhost:8000/health
 ```
 
-**観察:** 値を小さくすると地図の更新頻度が上がり精度が上がる反面、CPU 負荷が増えます。
-
-### SLAM のスキャン処理をリアルタイムで確認する
-
-```bash
-docker compose exec slam bash -lc "
-  source /opt/ros/jazzy/setup.bash
-  ros2 topic hz /map"
-```
-
-地図が更新されるたびにトピックが発行されます（デフォルト: 5秒間隔）。
+| フィールド | 説明 |
+|-----------|------|
+| `status` | `"ok"` 固定 |
+| `ros2_node` | ROS2 ノードが初期化済みなら `true` |
 
 ---
 
-## ハンズオン 2: ループ検出を理解する
+### POST /move_to
 
-### 概念
+ロボットを指定座標へ移動させる。
 
-SLAM の累積誤差問題:
+**リクエストボディ:**
 
-```
-スタート → A → B → C → D → スタートに戻る
-                               ↓
-                    位置の誤差が積み重なって
-                    「スタート地点が 2 か所」になる
-                               ↓
-                    ループ検出: 「ここはスタートだ」と認識
-                    → 累積誤差を一括修正 (グラフ最適化)
-```
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| `x` | float | ✓ | マップ座標系での X 位置 [m] |
+| `y` | float | ✓ | マップ座標系での Y 位置 [m] |
+| `yaw` | float | — | 目標姿勢（Z 軸回転）[rad]。省略時 = `0.0` |
 
-slam_toolbox はループ検出を **Ceres Solver** でグラフ最適化します。
-
-### ループ検出を観察する
-
-1. ロボットで一周してスタート地点に戻る
-2. RViz の地図を観察する
-3. ループ検出が成功すると、地図がわずかに「ずれ修正」される瞬間が見える
-
-ターミナルに以下のログが出ればループ検出成功:
+**yaw の向き:**
 
 ```
-[slam_toolbox]: Registering loop closure ...
+  yaw = 0.0      → +X 方向（東）を向く
+  yaw = 1.5708   → +Y 方向（北）を向く（π/2 rad）
+  yaw = 3.1416   → -X 方向（西）を向く（π rad）
+  yaw = -1.5708  → -Y 方向（南）を向く（-π/2 rad）
 ```
 
-### 実験: ループ検出を無効にしてみる
+**レスポンス (200):**
 
-```yaml
-# ws/config/slam.yaml
-do_loop_closing: false
+```json
+{"status": "accepted", "goal": {"x": 1.0, "y": 2.0, "yaw": 0.0}, "message": "..."}
 ```
 
-**観察:** 長距離移動後にスタートに戻ると、地図がずれたまま接続されます。
-ループ検出の効果がわかります。
+**レスポンス (503):**
+
+```json
+{"detail": "NavigateToPose アクションサーバーに接続できません。Nav2 の起動を確認してください。"}
+```
+
+**使用例:**
+
+```bash
+# 原点 (0, 0) へ移動
+curl -X POST http://localhost:8000/move_to \
+  -H "Content-Type: application/json" \
+  -d '{"x": 0.0, "y": 0.0}'
+
+# 北を向いて (−1, 1) へ移動
+curl -X POST http://localhost:8000/move_to \
+  -H "Content-Type: application/json" \
+  -d '{"x": -1.0, "y": 1.0, "yaw": 1.5708}'
+```
+
+**Python からのリクエスト例:**
+
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:8000/move_to",
+    json={"x": 1.0, "y": 2.0, "yaw": 0.0},
+)
+print(response.json())
+```
 
 ---
 
-## ハンズオン 3: 地図の解像度と精度を調整する
+## web_bridge_node.py の解説
 
-### 実験: 解像度を変えてみる
+### なぜ ROS2 ノードと FastAPI を同一プロセスで動かすのか
 
-```yaml
-# ws/config/slam.yaml
-resolution: 0.05   # デフォルト: 5cm/cell
-# ↓ より精細に
-resolution: 0.02   # 2cm/cell (高精度・高メモリ消費)
-# ↓ より粗く
-resolution: 0.10   # 10cm/cell (低精度・低メモリ消費)
+ROS2 ノードとして動きながら HTTP サーバーも立てる必要があります。
+これを実現するためにスレッドを分けています。
+
+```python
+# ROS2 エグゼキューターをバックグラウンドスレッドで起動
+executor = MultiThreadedExecutor()
+executor.add_node(_node)
+ros_thread = threading.Thread(target=executor.spin, daemon=True)
+ros_thread.start()
+
+# FastAPI / Uvicorn をメインスレッドで起動（ブロッキング）
+uvicorn.run(app, host='0.0.0.0', port=8000)
 ```
 
-**観察:**
-- `0.02` → 壁の角や細い通路が詳細に表現されるが、処理が重くなる
-- `0.10` → 処理は軽くなるが、狭い通路が通行不可と判定されることがある
+| スレッド | 役割 |
+|---------|------|
+| メインスレッド | Uvicorn が HTTP リクエストを受け付ける |
+| バックグラウンドスレッド | ROS2 エグゼキューターがコールバックを処理する |
 
-### 地図のメタデータを確認する
+### なぜ `use_sim_time:=true` が必要か
 
-```bash
-docker compose exec slam bash -lc "
-  source /opt/ros/jazzy/setup.bash
-  ros2 topic echo /map --once | head -10"
+Nav2 はシミュレーション時刻（`/clock` トピック）を使っています。
+`web_bridge_node` が発行する `PoseStamped` のタイムスタンプも同じ時計で発行しないと、
+TF の時刻不一致エラーが発生します。
+
+```python
+goal.pose.header.stamp = self.get_clock().now().to_msg()  # シミュレーション時刻で発行
 ```
 
-`info.resolution` と `info.width` × `info.height` で地図のサイズが確認できます。
+### なぜ移動完了を待たないのか
+
+HTTP リクエストを移動完了まで待機させると、長い移動中はタイムアウトしてしまいます。
+代わりに「ゴールを受け付けた」時点で即座に `accepted` を返し、
+ロボットの移動は Nav2 が非同期で実行します。
+
+```
+クライアント → POST /move_to
+                    ↓ 即座に返す（移動完了は待たない）
+クライアント ← {"status": "accepted"}
+                    ↓ 非同期で進行
+              Nav2 がロボットを目標まで移動させる
+```
 
 ---
 
-## ハンズオン 4: slam_toolbox のセーブ/ロード機能
-
-slam_toolbox は探索の途中経過を保存して再開する機能があります。
-
-### 途中経過を保存する
+## 停止方法
 
 ```bash
-docker compose exec slam bash -lc "
-  source /opt/ros/jazzy/setup.bash
-  ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap \
-    '{name: {data: /ws/maps/slam_session}}'"
+# nav プロファイルのサービスを停止
+docker compose --profile nav down
 ```
 
-### 保存した SLAM セッションから再開する
-
-`ws/config/slam.yaml` を変更してから再起動:
-
-```yaml
-# slam.yaml に追加
-map_file_name: /ws/maps/slam_session
-map_start_at_dock: true
-```
-
-> 探索を中断してセッションを保存し、翌日続きから再開できます。
-
----
-
-## ノードグラフの確認
-
-SLAM スタックが正常に起動しているか確認:
+過去のセッションで起動したコンテナ（オーファンコンテナ）が残っている場合は `--remove-orphans` を付けると全て停止できます:
 
 ```bash
-docker compose exec slam bash -lc "
-  source /opt/ros/jazzy/setup.bash
-  ros2 node list"
+docker compose --profile nav down --remove-orphans
 ```
 
-以下が表示されれば正常:
-
-```
-/ekf_filter_node         ← odom→base_footprint TF を発行
-/slam_toolbox            ← 地図生成・map→odom TF を発行
-/lifecycle_manager_slam  ← slam_toolbox を activate した後は待機
-```
-
-TF チェーンの確認:
-
-```bash
-docker compose exec slam bash -lc "
-  source /opt/ros/jazzy/setup.bash
-  ros2 run tf2_tools view_frames"
-```
-
-`map → odom → base_footprint → base_scan` の繋がりが確認できます。
+> **オーファンコンテナとは**
+> compose ファイルから削除されたサービスの残骸コンテナです。
+> `docker compose up` 時に `Found orphan containers` という警告が出ていたら該当します。
 
 ---
 
 ## トラブルシューティング
 
-### 地図が表示されない（RViz が真っ黒）
+### `503: NavigateToPose アクションサーバーに接続できません`
 
-slam_toolbox が activate されているか確認します:
-
-```bash
-docker compose logs slam | tail -30
-```
-
-`Managed nodes are active` が出ていれば正常です。
-出ていない場合は slam コンテナを再起動してください:
+Nav2 がまだ起動中です。起動から 40 秒以上待ってから再試行してください。
 
 ```bash
-docker compose --profile slam down
-docker compose --profile slam up
+# Nav2 の起動状態を確認
+docker compose logs navigation | tail -20
+
+# bt_navigator が起動していれば Nav2 は準備完了
+docker exec navigation bash -lc \
+  "source /opt/ros/jazzy/setup.bash && ros2 node list | grep bt_navigator"
 ```
 
-### 地図がすぐにずれる・歪む
+### ロボットが動かない（API は accepted を返すのに）
 
-**原因**: スキャンマッチングが低品質な環境（特徴の少ない廊下など）
+AMCL が自己位置推定できていません。RViz の **"2D Pose Estimate"** で初期位置を再設定してください。
 
-対処:
-1. ゆっくり動く（`minimum_travel_distance` を大きくして間引く）
-2. `link_match_minimum_response_fine` を上げて品質閾値を厳しくする
+### コンテナ名の競合エラー
 
-### map_saver_cli でエラーが出る
-
-`map_saver_cli` はコンテナ内で実行する必要があります（ホストマシンには入っていません）:
+前回の `docker compose run` で残ったコンテナが存在する場合:
 
 ```bash
-# NG: ホストマシンで実行
-ros2 run nav2_map_server map_saver_cli ...
-
-# OK: コンテナ内で実行
-docker compose exec slam bash -lc "
-  source /opt/ros/jazzy/setup.bash
-  ros2 run nav2_map_server map_saver_cli -f /ws/maps/slam_map"
+docker rm -f api_bridge
+docker compose --profile nav up
 ```
 
-### Nav2 フェーズで "Sensor origin is out of map bounds" 警告
+### api_bridge のログを確認する
 
+```bash
+docker compose logs api_bridge
 ```
-[global_costmap]: Sensor origin at (-2.03, -0.50) is out of map bounds
-```
-
-**原因**: SLAM 座標系と Gazebo ワールド座標系のずれ
-
-SLAM マップの座標系は Gazebo のワールド座標系とは異なります。
-ロボットのスポーン位置 (-2.0, -0.5) は Gazebo 座標ですが、
-SLAM マップにはその座標が存在しない場合があります。
-
-**対処**: RViz の `2D Pose Estimate` ツールで、
-SLAM マップ内のロボットが実際にいる位置に初期位置を設定してください。
-AMCL が収束すると警告は自然に解消されます。
-
-### Nav2 フェーズで地図と実環境がずれる
-
-SLAM 中にロボットが速く動きすぎると累積誤差が大きくなります。
-もう一度 SLAM で地図を作り直してください。
 
 ---
 
-## パラメータ早見表
+## Swagger UI（自動生成 API ドキュメント）
 
-| パラメータ | デフォルト | 効果 |
-|-----------|-----------|------|
-| `resolution` | `0.05 m` | 小さくすると精細、大きくすると処理が軽い |
-| `map_update_interval` | `5.0 s` | 小さくすると RViz の更新頻度が上がる |
-| `minimum_travel_distance` | `0.5 m` | 小さくすると処理頻度が上がり精度↑・CPU↑ |
-| `do_loop_closing` | `true` | false にするとループ検出なし |
-| `max_laser_range` | `3.5 m` | TurtleBot3 Burger の LiDAR 最大距離 |
-
----
-
-## まとめ: 学習した内容
+FastAPI はドキュメントを自動生成します。ブラウザで確認できます:
 
 ```
-Phase 5 全体の SLAM パイプライン
-
-  [LiDAR スキャン] ─┐
-                     ├→ slam_toolbox ─→ /map (Occupancy Grid)
-  [odom TF (EKF)] ──┘       │
-                             └→ map→odom TF
-                                      │
-                               [地図を保存]
-                               docker compose exec slam ...
-                               map_saver_cli -f /ws/maps/slam_map
-                                      │
-                                      ↓
-                              slam_map.pgm / yaml
-                                      │
-                               [Nav2 で再利用]
-                              --profile nav up
-                              + RViz で 2D Pose Estimate
-                              + 2D Goal Pose で自律移動
+http://localhost:8000/docs
 ```
-
-| 学習項目 | 対応コンポーネント | 設定ファイル |
-|---------|-----------------|-------------|
-| スキャンマッチング | `slam_toolbox` (async_slam_toolbox_node) | `slam.yaml` |
-| オドメトリ融合 | `ekf_filter_node` | `ekf.yaml` |
-| ループ検出・グラフ最適化 | `slam_toolbox` (Ceres Solver) | `slam.yaml` |
-| Lifecycle 管理 | `lifecycle_manager_slam` | `slam.launch.py` |
-| 地図保存 | `nav2_map_server` (map_saver_cli) | — |
-| 地図を使った自律移動 | Nav2 スタック (Phase 4 と同一) | `nav2_params.yaml` |
