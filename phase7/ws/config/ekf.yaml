@@ -1,0 +1,57 @@
+ekf_filter_node:
+  ros__parameters:
+    # Gazebo の /clock を使う
+    use_sim_time: true
+
+    # EKF の更新周期
+    frequency: 30.0
+    sensor_timeout: 0.1
+
+    # TurtleBot3 の平面移動前提
+    two_d_mode: true
+
+    # odom -> base_footprint の TF を publish する
+    publish_tf: true
+
+    # transform_time_offset を 0 にする
+    # 0.05 にすると EKF が publish する TF のタイムスタンプが +0.05 秒ずれ、
+    # scan のタイムスタンプ t に対して TF キャッシュの最古が t+0.05 になる。
+    # → AMCL が "earlier than all the data in the transform cache" を出し続けて
+    #   全 scan を捨て、map->odom TF が永遠に出なくなる根本原因。
+    transform_time_offset: 0.0
+    transform_timeout: 0.5
+
+    # robot_localization のフレーム設定
+    # world_frame を odom にすることで、
+    # EKF は局所的で連続な自己位置推定を担当する
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_footprint
+    world_frame: odom
+
+    # ホイールオドメトリ入力
+    odom0: /odom
+    odom0_queue_size: 10
+    odom0_differential: false
+    odom0_relative: false
+    odom0_config: [
+      true,  true,  false,   # x, y, z
+      false, false, true,    # roll, pitch, yaw
+      true,  true,  false,   # vx, vy, vz
+      false, false, true,    # vroll, vpitch, vyaw
+      false, false, false    # ax, ay, az
+    ]
+
+    # IMU 入力
+    imu0: /imu
+    imu0_queue_size: 10
+    imu0_differential: false
+    imu0_relative: false
+    imu0_remove_gravitational_acceleration: true
+    imu0_config: [
+      false, false, false,   # x, y, z
+      false, false, true,    # roll, pitch, yaw
+      false, false, false,   # vx, vy, vz
+      false, false, true,    # vroll, vpitch, vyaw
+      false, false, false    # ax, ay, az
+    ]
