@@ -182,50 +182,6 @@ services:
       - source /opt/ros/jazzy/setup.bash && python3 /ws/scripts/web_bridge_node.py --ros-args -p use_sim_time:=true
 
   # ─────────────────────────────────────────────────────────────────
-  # Open-RMF EasyFullControl Fleet Adapter
-  #
-  # RMF Core (rmf_traffic_ros2 / rmf_task_ros2) と api_bridge を仲介する。
-  # RMF からの navigation task を受け取り POST /move_to に変換する。
-  # /amcl_pose をサブスクライブしてロボット位置を RMF に通知する。
-  #
-  # 起動: docker compose --profile nav --profile rmf up
-  # または既存 nav スタックに合わせてプロファイルを追加する場合:
-  #   docker compose --profile nav up
-  #   (rmf_adapter を nav profile に含める場合は profiles: [nav] に変更可)
-  # ─────────────────────────────────────────────────────────────────
-  rmf_adapter:
-    profiles: [rmf]
-    build:
-      context: .
-      dockerfile: rmf_adapter/Dockerfile
-    container_name: rmf_adapter
-    # network_mode: host を選択した理由:
-    #   1. 既存コンテナ (api_bridge, localization 等) が全て host モードのため、
-    #      CycloneDDS の DDS 通信 (/amcl_pose 等) を同一 network_mode で統一する
-    #   2. api_bridge の REST endpoint (localhost:8000) に直接アクセスできる
-    #   3. bridge ネットワーク使用時は DDS マルチキャストが複雑になるため避ける
-    network_mode: host
-    ipc: host
-    depends_on:
-      - api_bridge
-    environment:
-      TURTLEBOT3_MODEL: burger
-      ROS_DOMAIN_ID: 0
-      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
-    volumes:
-      # スクリプトをコンテナ内 /rmf_adapter にマウント (開発時の即反映)
-      - ./rmf_adapter:/rmf_adapter:ro
-    command:
-      - bash
-      - -lc
-      - |
-        source /opt/ros/jazzy/setup.bash
-        cd /rmf_adapter
-        python3 fleet_adapter.py \
-          --config /rmf_adapter/config/fleet_config.yaml \
-          --nav-graph /rmf_adapter/config/nav_graph.yaml
-
-  # ─────────────────────────────────────────────────────────────────
   # テレオペ (SLAM フェーズで手動操作するために使用)
   #   docker compose run --rm teleop
   # Nav2 ナビゲーション中は cmd_vel が競合するため使用しない

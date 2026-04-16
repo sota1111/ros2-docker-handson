@@ -1,7 +1,7 @@
 # ROS2 Jazzy ハンズオン
 
 TurtleBot3を使ったROS2 Jazzy入門ハンズオンです。
-Phase 0〜7を通じて、シミュレーション環境の構築から SLAM による地図生成・自律移動・外部 API 連携・Open-RMF 統合までを段階的に学びます。
+Phase 0〜7を通じて、シミュレーション環境の構築から SLAM による地図生成・自律移動・外部 API 連携までを段階的に学びます。
 
 ---
 
@@ -16,7 +16,7 @@ Phase 0〜7を通じて、シミュレーション環境の構築から SLAM に
 | [Phase 4](#phase-4-nav2による自律移動) | Nav2 による自律移動 | navigation2 (nav2-planner, nav2-controller, nav2-bt-navigator) |
 | [Phase 5](#phase-5-slam_toolboxによる地図生成) | SLAM による地図生成と自律移動 | slam-toolbox |
 | [Phase 6](#phase-6-rest-apiブリッジ) | REST API ブリッジ（HTTP でロボット制御） | FastAPI, uvicorn |
-| [Phase 7](#phase-7-open-rmf-fleet-adapter) | Open-RMF Fleet Adapter 統合 | rmf_fleet_adapter_python (EasyFullControl) |
+| [Phase 7](#phase-7-x11修正・デフォルト地図適用) | X11 修正・デフォルト地図適用 | — |
 
 ---
 
@@ -683,62 +683,29 @@ Swagger UI: `http://localhost:8000/docs`
 
 ---
 
-## Phase 7: Open-RMF Fleet Adapter
+## Phase 7: X11修正・デフォルト地図適用
 
 ### 概要
 
-Phase 6 の REST API ブリッジに加え、**Open-RMF EasyFullControl Fleet Adapter** を追加します。
-RMF Core（rmf_traffic_ros2 / rmf_task_ros2）からのタスク指令を受け取り、
-既存の `api_bridge` を介して Nav2 に橋渡しする構成です。
+Phase 6 の構成を安定化させた修正フェーズです。
+X11 転送設定を修正し、SLAM で生成した地図の代わりにリポジトリに同梱済みの
+デフォルト地図（`ws/maps/map.yaml`）を使うよう変更しています。
 
 ### Phase 6 からの変更点
 
-| 追加ファイル | 内容 |
-|------------|------|
-| `rmf_adapter/fleet_adapter.py` | EasyFullControl fleet adapter 本体 |
-| `rmf_adapter/robot_api_client.py` | api_bridge REST クライアント |
-| `rmf_adapter/Dockerfile` | rmf_fleet_adapter_python 入り専用イメージ |
-| `rmf_adapter/config/fleet_config.yaml` | fleet・ロボット仕様設定 |
-| `rmf_adapter/config/nav_graph.yaml` | RMF ナビゲーショングラフ |
-| `docker-compose.yml` | `rmf_adapter` サービスを `rmf` プロファイルで追加 |
-
-### アーキテクチャ
-
-```
-[RMF Core]
-    ↕ DDS (CycloneDDS)
-[rmf_adapter]
-  fleet_adapter.py
-    ├─ /amcl_pose → updater.update_position() → RMF に位置通知
-    └─ navigate() → POST /move_to → ゴール到達で execution.finished()
-    ↕ HTTP REST
-[api_bridge]  →  Nav2  →  Gazebo
-```
-
-### ナビゲーショングラフ（nav_graph.yaml）
-
-| waypoint | 座標 (x, y) | 役割 |
-|----------|------------|------|
-| `start` | (−2.0, −0.5) | ロボット初期位置 / 充電ポイント |
-| `center` | (0.0, −0.5) | センター付近 |
-| `east` | (1.5, −0.5) | 東側オープンスペース |
-| `north` | (0.0, 1.5) | 北側通路 |
+| 変更内容 | 詳細 |
+|----------|------|
+| X11 修正 | GUI コンテナの X11 転送設定を修正し、Gazebo / RViz の表示が安定するよう対応 |
+| デフォルト地図適用 | localization コンテナの地図を `slam_map.yaml` から `map.yaml`（同梱済み地図）に変更 |
 
 ### 起動手順
 
+Phase 6 と同じです。
+
 ```bash
 xhost +local:root
-# nav + RMF を同時起動
-docker compose --profile nav --profile rmf up
+docker compose --profile nav up
 ```
-
-### 学習ポイント
-
-- Open-RMF EasyFullControl API によるフリート管理の仕組み
-- rclpy と rmf_fleet_adapter_python（rclcpp）を同一プロセスで共存させる方法
-- `/amcl_pose` サブスクライブによる RMF への位置通知
-- `execution.finished()` による非同期タスク完了通知
-- `_lock` を使ったマルチスレッド安全な状態管理
 
 ---
 
@@ -759,7 +726,6 @@ ROS2 Jazzy
 ├── 可視化: RViz2 + nav2_rviz_plugins
 ├── SLAM: slam_toolbox (async_slam_toolbox_node)
 ├── REST API ブリッジ: FastAPI + uvicorn (Phase 6〜)
-├── フリート管理: Open-RMF rmf_fleet_adapter_python / EasyFullControl (Phase 7)
 ├── ミドルウェア: CycloneDDS
 └── コンテナ化: Docker / Docker Compose
 ```
