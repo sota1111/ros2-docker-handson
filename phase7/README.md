@@ -1,94 +1,178 @@
-# Phase 6: REST API ブリッジ（外部システムからロボットを HTTP で制御）
+# Phase 7: TurtleBot3 自律移動システム
 
-## Phase 5 からの変更点
-
-Phase 5 では RViz の GUI でゴールを指定していました。
-Phase 6 では **HTTP リクエスト** でロボットを操作できるようにします。
-これにより、Web アプリ・Python スクリプト・管理システムなど ROS2 を知らない外部システムからもロボットを制御できます。
-
-### 追加・変更したファイル
-
-| ファイル | 変更内容 |
-|----------|---------|
-| `ws/scripts/web_bridge_node.py` | **新規追加** — FastAPI + ROS2 アクションクライアント |
-| `Dockerfile` | `python3-fastapi` / `python3-uvicorn` / `python3-pydantic` を追加 |
-| `docker-compose.yml` | `api_bridge` サービスを追加（nav プロファイル） |
-
-### Phase 5 との構成の違い
-
-```
-【Phase 5】
-  RViz (GUI)
-    └─ 2D Goal Pose ──→ /navigate_to_pose (Action) ──→ ロボット移動
-
-【Phase 6】
-  curl / Python / Web アプリ
-    └─ POST /move_to ──→ web_bridge_node ──→ /navigate_to_pose (Action) ──→ ロボット移動
-                              ↑
-                     FastAPI + ROS2 ノード (api_bridge コンテナ)
-```
-
-Phase 5 の RViz による操作は引き続き利用できます。Phase 6 はそこに HTTP 経由の操作経路を追加したものです。
+TurtleBot3 (burger) を Gazebo でシミュレーションし、SLAM による地図生成と Nav2 による自律移動を行うシステムです。
+外部から HTTP 経由でロボットに移動指令を送る REST API ブリッジも含みます。
 
 ---
 
-## システム構成
+## システム全体構成
 
 ```
-docker compose --profile nav up で起動するコンテナ:
+docker compose のプロファイル構成:
 
-  gazebo        Gazebo シミュレーター（ロボット・センサー）
-  localization  EKF + AMCL + map_server（自己位置推定）
-  navigation    Nav2 スタック（経路計画・制御）
-  rviz_nav      RViz（可視化・手動ゴール指定）
-  api_bridge    FastAPI サーバー ★ Phase 6 で追加
+  --profile slam   SLAM フェーズ（地図生成）
+    gazebo         Gazebo シミュレーター
+    slam           EKF + slam_toolbox（地図生成）
+    rviz_slam      RViz（地図生成の観察）
+
+  --profile nav    ナビゲーションフェーズ（自律移動）
+    gazebo         Gazebo シミュレーター
+    localization   EKF + AMCL + map_server（自己位置推定）
+    navigation     Nav2 スタック（経路計画・自律移動）
+    rviz_nav       RViz（ナビゲーションの観察）
+    api_bridge     FastAPI REST ブリッジ（HTTP 経由の移動指令）
+
+  --profile debug  （手動操作用、単独使用）
+    teleop         キーボードテレオペ
 ```
 
-### api_bridge コンテナの内部構造
+---
+
+## フェーズ A: SLAM による地図生成
+
+### 起動
+
+```bash
+xhost +local:root
+docker compose --profile slam up
+```
+
+### 起動シーケンス
+
+| 経過時間 | 起動内容 |
+|---------|---------|
+| t = 0s  | Gazebo 起動（`/clock` / `/scan` / `/odom` / `/imu` 発行開始） |
+| t = 5s  | `ekf_filter_node` 起動 → `odom → base_footprint` TF 発行開始 |
+| t = 10s | `async_slam_toolbox_node` + `lifecycle_manager_slam` 起動 → 地図生成開始 |
+
+### TF ツリー（SLAM フェーズ）
+
+```
+map ──(slam_toolbox)──→ odom ──(EKF)──→ base_footprint ──→ base_scan
+```
+
+- **EKF** (`robot_localization`): `/odom` + `/imu` を融合して `odom → base_footprint` TF を 30Hz で発行
+- **slam_toolbox**: LiDAR スキャンと `odom` TF からスキャンマッチングで位置推定し、`/map` トピックと `map → odom` TF を発行
+
+### 地図の保存
+
+RViz でロボットを走行させながら地図を生成したら、以下で保存します:
+
+```bash
+docker exec slam bash -lc \
+  "source /opt/ros/jazzy/setup.bash && \
+   ros2 run nav2_map_server map_saver_cli -f /ws/maps/map"
+```
+
+保存されるファイル:
+- `ws/maps/map.pgm` — 画素値で障害物/空間を表すグレースケール画像（解像度 0.05m/px、範囲 20×20m）
+- `ws/maps/map.yaml` — 地図のメタデータ（解像度・原点・閾値）
+
+---
+
+## フェーズ B: Nav2 による自律移動
+
+### 起動
+
+```bash
+xhost +local:root
+docker compose --profile nav up
+```
+
+### 起動シーケンス
+
+| 経過時間 | コンテナ | 起動内容 |
+|---------|---------|---------|
+| t = 0s  | gazebo | Gazebo 起動 |
+| t = 5s  | localization | EKF 起動 → `odom → base_footprint` TF 確立 |
+| t = 15s | localization | AMCL + map_server 起動 → `map → odom` TF 確立 |
+| t = 40s | navigation | Nav2 全ノード起動 |
+| t = 40s | api_bridge | FastAPI サーバー起動（ポート 8000） |
+
+### 自己位置推定（localization コンテナ）
+
+`localization.launch.py` が以下を起動します:
+
+| ノード | 役割 |
+|--------|------|
+| `ekf_filter_node` | `/odom` + `/imu` 融合 → `odom → base_footprint` TF |
+| `map_server` | 保存済み地図 (`map.yaml`) を `/map` トピックで配信 |
+| `amcl` | パーティクルフィルタで `map → odom` TF を推定 |
+| `lifecycle_manager_localization` | map_server → amcl の順に activate |
+
+AMCL の初期位置は docker-compose で `init_x:=-2.0 init_y:=-0.5 init_yaw:=0.0` として渡されます。
+起動後は RViz の **"2D Pose Estimate"** ツールで正確な初期位置を設定してください。
+
+#### AMCL パラメータのポイント（`config/amcl.yaml`）
+
+| パラメータ | 値 | 理由 |
+|-----------|-----|------|
+| `min_particles` / `max_particles` | 200 / 5000 | 散布→収束の変化を視覚的に確認しやすくする |
+| `alpha1`〜`alpha5` | 0.1 | 運動ノイズを小さくして収束を速める |
+| `laser_z_hit` | 0.9 | スキャン一致度を強く効かせて収束を促進 |
+| `transform_tolerance` | 2.0 | 起動直後の TF タイムスタンプのずれを吸収 |
+
+#### EKF パラメータのポイント（`config/ekf.yaml`）
+
+| パラメータ | 値 | 理由 |
+|-----------|-----|------|
+| `transform_time_offset` | 0.0 | 0 以外にすると TF タイムスタンプが未来にずれ、AMCL が全スキャンを破棄する |
+| `two_d_mode` | true | 平面移動のみのため Z/Roll/Pitch を無視 |
+| `frequency` | 30.0 Hz | 十分な TF 更新頻度 |
+
+### Nav2 スタック（navigation コンテナ）
+
+`navigation.launch.py` が 40 秒待機後に以下を起動します:
+
+| ノード | 役割 |
+|--------|------|
+| `planner_server` | NavFn (A*) によるグローバルパス計画 |
+| `controller_server` | DWB ローカルプランナーによる速度指令生成 |
+| `smoother_server` | グローバルパスの平滑化 |
+| `behavior_server` | リカバリ行動（spin / backup / wait） |
+| `bt_navigator` | ビヘイビアツリーでプランナー・コントローラ・リカバリを統合 |
+| `waypoint_follower` | 複数ウェイポイントの順次追跡 |
+| `velocity_smoother` | 加速度制限を適用した速度指令の平滑化 |
+| `lifecycle_manager_navigation` | 上記ノードを順番に activate |
+
+#### 速度指令のフロー
+
+```
+controller_server ─┐
+                   ├──→ /cmd_vel_nav ──→ velocity_smoother ──→ /cmd_vel ──→ Gazebo
+behavior_server   ─┘
+```
+
+### RViz でゴール指定（手動操作）
+
+1. RViz の **"2D Goal Pose"** ツールをクリック
+2. 地図上の目標位置をクリック＆ドラッグで指定
+3. ロボットが自律移動を開始
+
+---
+
+## REST API ブリッジ（api_bridge コンテナ）
+
+`web_bridge_node.py` が FastAPI + ROS2 ノードを同一プロセスで動作させます。
+
+### 内部構造
 
 ```
 api_bridge コンテナ
   ├─ [メインスレッド] Uvicorn (ポート 8000)
   │     GET  /health   → 死活確認
-  │     POST /move_to  → ゴール座標を受け取る
+  │     POST /move_to  → ゴール座標受付
   │
   └─ [バックグラウンドスレッド] ROS2 MultiThreadedExecutor
-        web_bridge_node
-          └─ ActionClient → navigate_to_pose → Nav2
+        WebBridgeNode
+          └─ ActionClient → /navigate_to_pose → Nav2 bt_navigator
 ```
 
-`POST /move_to` を受け取ると、`NavigateToPose` アクションゴールを Nav2 に送信して即座に `accepted` を返します（移動完了は待ちません）。
+ROS2 エグゼキューターをバックグラウンドスレッドで動かし、Uvicorn をメインスレッドで動かすことで、両者を同一プロセスで共存させています。
 
----
+### エンドポイント
 
-## 起動手順
-
-### ステップ 1: 起動
-
-```bash
-docker compose --profile nav up
-```
-
-**起動シーケンス:**
-
-| 経過時間 | 起動内容 |
-|----------|---------|
-| t = 0s  | Gazebo 起動 |
-| t = 5s  | EKF 起動 → `odom → base_footprint` TF 確立 |
-| t = 15s | AMCL + map_server 起動（`slam_map.yaml` 読み込み） |
-| t = 40s | Nav2 スタック起動 |
-| t = 40s | **api_bridge 起動** → ポート 8000 で待機開始 |
-
-### ステップ 2: RViz で初期位置を設定
-
-AMCL が自己位置を推定するため、最初に RViz で初期位置を設定する必要があります。
-
-1. `rviz_nav` コンテナの RViz が開いたことを確認
-2. ツールバーの **"2D Pose Estimate"** をクリック
-3. 地図上のロボットの実際の位置をクリック＆ドラッグして向きを指定
-4. AMCL のパーティクル（赤い点群）が収束すれば準備完了
-
-### ステップ 3: API サーバーの死活確認
+#### GET /health
 
 ```bash
 curl http://localhost:8000/health
@@ -98,7 +182,15 @@ curl http://localhost:8000/health
 {"status": "ok", "ros2_node": true}
 ```
 
-### ステップ 4: HTTP でロボットを移動させる
+#### POST /move_to
+
+ロボットを指定座標へ移動させます。ゴール受付時点で即座にレスポンスを返し、移動完了は待ちません。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| `x` | float | ✓ | マップ座標系 X 位置 [m] |
+| `y` | float | ✓ | マップ座標系 Y 位置 [m] |
+| `yaw` | float | — | 目標姿勢 Z 軸回転 [rad]、デフォルト 0.0 |
 
 ```bash
 curl -X POST http://localhost:8000/move_to \
@@ -107,203 +199,72 @@ curl -X POST http://localhost:8000/move_to \
 ```
 
 ```json
-{
-  "status": "accepted",
-  "goal": {"x": 1.0, "y": 2.0, "yaw": 0.0},
-  "message": "ゴールを受け付けました。ロボットが移動を開始します。"
-}
+{"status": "accepted", "goal": {"x": 1.0, "y": 2.0, "yaw": 0.0}, "message": "ゴールを受け付けました。ロボットが移動を開始します。"}
 ```
-
-RViz でロボットが目標座標に向けて動き始めることを確認してください。
-
----
-
-## API リファレンス
-
-### GET /health
-
-サーバーと ROS2 ノードの死活確認。
-
-```bash
-curl http://localhost:8000/health
-```
-
-| フィールド | 説明 |
-|-----------|------|
-| `status` | `"ok"` 固定 |
-| `ros2_node` | ROS2 ノードが初期化済みなら `true` |
-
----
-
-### POST /move_to
-
-ロボットを指定座標へ移動させる。
-
-**リクエストボディ:**
-
-| フィールド | 型 | 必須 | 説明 |
-|-----------|-----|------|------|
-| `x` | float | ✓ | マップ座標系での X 位置 [m] |
-| `y` | float | ✓ | マップ座標系での Y 位置 [m] |
-| `yaw` | float | — | 目標姿勢（Z 軸回転）[rad]。省略時 = `0.0` |
 
 **yaw の向き:**
 
 ```
-  yaw = 0.0      → +X 方向（東）を向く
-  yaw = 1.5708   → +Y 方向（北）を向く（π/2 rad）
-  yaw = 3.1416   → -X 方向（西）を向く（π rad）
-  yaw = -1.5708  → -Y 方向（南）を向く（-π/2 rad）
+yaw = 0.0     → +X 方向（東）
+yaw = 1.5708  → +Y 方向（北）（π/2 rad）
+yaw = 3.1416  → -X 方向（西）（π rad）
+yaw = -1.5708 → -Y 方向（南）（-π/2 rad）
 ```
 
-**レスポンス (200):**
-
-```json
-{"status": "accepted", "goal": {"x": 1.0, "y": 2.0, "yaw": 0.0}, "message": "..."}
-```
-
-**レスポンス (503):**
+**エラーレスポンス (503):** Nav2 がまだ起動していない場合
 
 ```json
 {"detail": "NavigateToPose アクションサーバーに接続できません。Nav2 の起動を確認してください。"}
 ```
 
-**使用例:**
+### Swagger UI
 
-```bash
-# 原点 (0, 0) へ移動
-curl -X POST http://localhost:8000/move_to \
-  -H "Content-Type: application/json" \
-  -d '{"x": 0.0, "y": 0.0}'
-
-# 北を向いて (−1, 1) へ移動
-curl -X POST http://localhost:8000/move_to \
-  -H "Content-Type: application/json" \
-  -d '{"x": -1.0, "y": 1.0, "yaw": 1.5708}'
 ```
-
-**Python からのリクエスト例:**
-
-```python
-import requests
-
-response = requests.post(
-    "http://localhost:8000/move_to",
-    json={"x": 1.0, "y": 2.0, "yaw": 0.0},
-)
-print(response.json())
+http://localhost:8000/docs
 ```
 
 ---
 
-## web_bridge_node.py の解説
-
-### なぜ ROS2 ノードと FastAPI を同一プロセスで動かすのか
-
-ROS2 ノードとして動きながら HTTP サーバーも立てる必要があります。
-これを実現するためにスレッドを分けています。
-
-```python
-# ROS2 エグゼキューターをバックグラウンドスレッドで起動
-executor = MultiThreadedExecutor()
-executor.add_node(_node)
-ros_thread = threading.Thread(target=executor.spin, daemon=True)
-ros_thread.start()
-
-# FastAPI / Uvicorn をメインスレッドで起動（ブロッキング）
-uvicorn.run(app, host='0.0.0.0', port=8000)
-```
-
-| スレッド | 役割 |
-|---------|------|
-| メインスレッド | Uvicorn が HTTP リクエストを受け付ける |
-| バックグラウンドスレッド | ROS2 エグゼキューターがコールバックを処理する |
-
-### なぜ `use_sim_time:=true` が必要か
-
-Nav2 はシミュレーション時刻（`/clock` トピック）を使っています。
-`web_bridge_node` が発行する `PoseStamped` のタイムスタンプも同じ時計で発行しないと、
-TF の時刻不一致エラーが発生します。
-
-```python
-goal.pose.header.stamp = self.get_clock().now().to_msg()  # シミュレーション時刻で発行
-```
-
-### なぜ移動完了を待たないのか
-
-HTTP リクエストを移動完了まで待機させると、長い移動中はタイムアウトしてしまいます。
-代わりに「ゴールを受け付けた」時点で即座に `accepted` を返し、
-ロボットの移動は Nav2 が非同期で実行します。
-
-```
-クライアント → POST /move_to
-                    ↓ 即座に返す（移動完了は待たない）
-クライアント ← {"status": "accepted"}
-                    ↓ 非同期で進行
-              Nav2 がロボットを目標まで移動させる
-```
-
----
-
-## 停止方法
+## 停止
 
 ```bash
-# nav プロファイルのサービスを停止
 docker compose --profile nav down
+# または
+docker compose --profile slam down
 ```
 
-過去のセッションで起動したコンテナ（オーファンコンテナ）が残っている場合は `--remove-orphans` を付けると全て停止できます:
+オーファンコンテナが残っている場合:
 
 ```bash
 docker compose --profile nav down --remove-orphans
 ```
 
-> **オーファンコンテナとは**
-> compose ファイルから削除されたサービスの残骸コンテナです。
-> `docker compose up` 時に `Found orphan containers` という警告が出ていたら該当します。
-
 ---
 
 ## トラブルシューティング
 
+### AMCL が収束しない（ロボットが動かない）
+
+RViz の **"2D Pose Estimate"** で初期位置を再設定してください。
+赤いパーティクル群が一点に収束すれば自己位置推定完了です。
+
 ### `503: NavigateToPose アクションサーバーに接続できません`
 
-Nav2 がまだ起動中です。起動から 40 秒以上待ってから再試行してください。
+Nav2 はまだ起動中です。起動から 40 秒以上待ってから再試行してください。
 
 ```bash
-# Nav2 の起動状態を確認
 docker compose logs navigation | tail -20
-
-# bt_navigator が起動していれば Nav2 は準備完了
-docker exec navigation bash -lc \
-  "source /opt/ros/jazzy/setup.bash && ros2 node list | grep bt_navigator"
 ```
 
-### ロボットが動かない（API は accepted を返すのに）
-
-AMCL が自己位置推定できていません。RViz の **"2D Pose Estimate"** で初期位置を再設定してください。
-
-### コンテナ名の競合エラー
-
-前回の `docker compose run` で残ったコンテナが存在する場合:
-
-```bash
-docker rm -f api_bridge
-docker compose --profile nav up
-```
-
-### api_bridge のログを確認する
+### api_bridge のログ確認
 
 ```bash
 docker compose logs api_bridge
 ```
 
----
+### コンテナ名の競合
 
-## Swagger UI（自動生成 API ドキュメント）
-
-FastAPI はドキュメントを自動生成します。ブラウザで確認できます:
-
-```
-http://localhost:8000/docs
+```bash
+docker rm -f api_bridge
+docker compose --profile nav up
 ```

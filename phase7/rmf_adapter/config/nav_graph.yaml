@@ -1,0 +1,80 @@
+# nav_graph.yaml
+#
+# TurtleBot3 World (Gazebo) 用 RMF ナビゲーショングラフ
+#
+# ─── マップ情報 ────────────────────────────────────────────────────────────────
+# map.yaml:
+#   origin: [-10, -10, 0]   ← マップ左下がワールド座標 (-10, -10)
+#   resolution: 0.05 m/px
+#   size: ~400×400 px → 20m × 20m
+#
+# TurtleBot3 World (turtlebot3_world.world) の障害物配置:
+#   中心付近 (0,0) 周辺に複数の矩形障害物、外周に壁
+#   ロボット初期位置: (-2.0, -0.5) — localization コンテナの init_x/y と一致
+#
+# ─── 座標根拠 ──────────────────────────────────────────────────────────────────
+# 全 waypoint は TurtleBot3 World の既知オープンスペースを参考に配置。
+# 実際の走行可否はシミュレーション上で確認すること。
+# Nav2 は障害物を動的に回避するため、waypoint が障害物と微妙に重なっても
+# 経路計画側でリルートされる。
+#
+# ─── RMF でのレベル名 ─────────────────────────────────────────────────────────
+# fleet_config.yaml の map_name: L1 と一致させること。
+
+waypoints:
+  # ── ロボット初期位置 / 充電ポイント ────────────────────────────────────────
+  - name: start
+    x: -2.0
+    y: -0.5
+    yaw: 0.0
+    is_charger: true        # この waypoint が充電スポット
+    is_holding_point: true  # ロボットが待機できる
+
+  # ── センター付近 (障害物の隙間) ─────────────────────────────────────────────
+  # TurtleBot3 World の中心部 (0,0) は複数障害物があるため
+  # 少し南にずれた (0.0, -0.5) を通路として使用
+  - name: center
+    x: 0.0
+    y: -0.5
+    yaw: 0.0
+    is_charger: false
+    is_holding_point: true
+
+  # ── 東側エリア ───────────────────────────────────────────────────────────────
+  # TurtleBot3 World の右(東)側オープンスペース
+  - name: east
+    x: 1.5
+    y: -0.5
+    yaw: 0.0
+    is_charger: false
+    is_holding_point: true
+
+  # ── 北側エリア ───────────────────────────────────────────────────────────────
+  # 障害物の北側の通路
+  - name: north
+    x: 0.0
+    y: 1.5
+    yaw: 0.0
+    is_charger: false
+    is_holding_point: true
+
+lanes:
+  # start ↔ center (東西方向の通路)
+  - from: start
+    to: center
+    bidirectional: true
+
+  # center ↔ east (東方向)
+  - from: center
+    to: east
+    bidirectional: true
+
+  # center ↔ north (北方向)
+  - from: center
+    to: north
+    bidirectional: true
+
+  # start ↔ north (対角ショートカット — Nav2 が障害物を避けて経路を調整する)
+  - from: start
+    to: north
+    bidirectional: true
